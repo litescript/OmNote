@@ -17,13 +17,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            python3.10 python3.10-venv python3.10-distutils \
+            python3 python3-pip python3-venv \
             python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 \
             pipx xvfb
 
-      - name: Install OmNote with pipx (using Python 3.10)
+      - name: Install OmNote with pipx using system Python
         run: |
-          pipx install . --python python3.10
+          pipx install . --python /usr/bin/python3
           pipx list
 
       - name: Run omnote --help under Xvfb
