@@ -1,5 +1,9 @@
 # OmNote
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python Version](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
+[![GitHub stars](https://img.shields.io/github/stars/litescript/OmNote?style=social)](https://github.com/litescript/OmNote/stargazers)
+
 OmNote is a lightweight, theme-aware plain-text editor built with GTK4 and libadwaita.  
 It integrates seamlessly with the Omarchy desktop environment and provides a clean, efficient workspace with minimal dependencies and "NASA(ish)-style" code hygiene.
 
