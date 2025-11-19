@@ -40,6 +40,10 @@ jobs:
       image: archlinux:latest
 
     steps:
+      - name: Install base shell (Arch fix)
+        run: |
+          pacman -Syu --noconfirm bash
+
       - name: Install system dependencies (Arch)
         run: |
           pacman -Syu --noconfirm \
