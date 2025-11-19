@@ -1,11 +1,10 @@
 [Desktop Entry]
-Type=Application
 Name=OmNote
-GenericName=Text Editor
-Comment=Tiny GTK4 notepad with Omarchy-aware theming
-Exec=omnote %U
-Icon=dev.omarchy.MicroPad
+Comment=Lightweight notepad for Omarchy
+Exec=omnote
+Icon=dev.omarchy.OmNote
 Terminal=false
+Type=Application
 Categories=Utility;TextEditor;
 StartupNotify=true
-X-GNOME-UsesNotifications=false
+Keywords=text;editor;note;omarchy;

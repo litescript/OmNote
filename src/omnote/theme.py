@@ -1,11 +1,11 @@
-# src/omnote/theme.py
 from __future__ import annotations
 
-import os, re, glob
+import glob
+import os
+import re
 from pathlib import Path
-from typing import Optional, Dict, Set
 
-from gi.repository import Gtk, Gdk, Gio, Adw, GLib  # type: ignore
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk
 
 # -------------------- optional parsers --------------------
 try:
@@ -16,13 +16,16 @@ except Exception:
 try:
     import yaml  # optional fallback
 except Exception:
-    yaml = None  # type: ignore
+    yaml = None
 
 # -------------------- globals / constants --------------------
-_CURRENT_PROVIDER: Optional[Gtk.CssProvider] = None
-_WATCHER_SINGLETON: Optional["ThemeWatcher"] = None  # singleton handle
+_CURRENT_PROVIDER: Gtk.CssProvider | None = None
+_WATCHER_SINGLETON: ThemeWatcher | None = None  # singleton handle
 
-HEX_RE = r"(?:#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})|0x[0-9a-fA-F]{6}|rgb:[0-9a-fA-F]{2}/[0-9a-fA-F]{2}/[0-9a-fA-F]{2})"
+HEX_RE = (
+    r"(?:#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})|"
+    r"0x[0-9a-fA-F]{6}|rgb:[0-9a-fA-F]{2}/[0-9a-fA-F]{2}/[0-9a-fA-F]{2})"
+)
 
 OMARCHY_DIR      = Path("~/.config/omarchy").expanduser()
 OMARCHY_THEMES   = OMARCHY_DIR / "themes"
@@ -35,9 +38,14 @@ OMARCHY_MARKERS  = [
 HYPR_USER_CONF   = Path("~/.config/hypr/hyprland.conf").expanduser()
 
 # -------------------- utils --------------------
+def _getenv(var: str, default: str | None = None) -> str | None:
+    """Get environment variable with OMNOTE_* preferred, MICROPAD_* fallback."""
+    omnote_var = var.replace("MICROPAD_", "OMNOTE_")
+    return os.getenv(omnote_var) or os.getenv(var) or default
+
 def _dbg(msg: str) -> None:
-    if os.getenv("MICROPAD_DEBUG"):
-        print(f"[MicroPad:theme] {msg}")
+    if _getenv("MICROPAD_DEBUG"):
+        print(f"[OmNote:theme] {msg}")
 
 def _read(path: Path) -> str:
     try:
@@ -45,7 +53,7 @@ def _read(path: Path) -> str:
     except Exception:
         return ""
 
-def _norm_hex(s: Optional[str]) -> Optional[str]:
+def _norm_hex(s: str | None) -> str | None:
     if not s:
         return None
     s = s.strip()
@@ -73,17 +81,18 @@ def _mix_color(hex_a: str, hex_b: str, t: float) -> str:
         a = _rgb(hex_a)
         b = _rgb(hex_b)
     except Exception:
-        a = (30,30,30); b = (224,224,224)
+        a = (30, 30, 30)
+        b = (224, 224, 224)
     r = _clamp(round(a[0]*(1-t) + b[0]*t))
     g = _clamp(round(a[1]*(1-t) + b[1]*t))
     b_ = _clamp(round(a[2]*(1-t) + b[2]*t))
     return _hex(r,g,b_)
 
 # -------------------- palette helpers --------------------
-def _empty_palette() -> Dict[str, Optional[str]]:
+def _empty_palette() -> dict[str, str | None]:
     return {"bg": None, "fg": None, "sel_bg": None, "sel_fg": None, "caret": None}
 
-def _css_from_palette(pal: Dict[str, Optional[str]], *, dark: bool) -> str:
+def _css_from_palette(pal: dict[str, str | None], *, dark: bool) -> str:
     bg    = pal.get("bg")     or "#1e1e1e"
     fg    = pal.get("fg")     or "#e0e0e0"
     selbg = pal.get("sel_bg") or "alpha(@term_fg,0.15)"
@@ -100,18 +109,34 @@ def _css_from_palette(pal: Dict[str, Optional[str]], *, dark: bool) -> str:
         f"@define-color term_sel_fg {selfg};",
         f"@define-color term_caret {caret};",
         "",
-        "window, .background, .view {",
+        "window, .background {",
         "  background-color: @term_bg;",
         "  color: @term_fg;",
         "}",
-        "textview, textview > text {",
+        "textview, textview.view {",
         "  background-color: @term_bg;",
+        "  color: @term_fg;",
+        "}",
+        "textview > text, textview.view > text {",
+        "  background-color: @term_bg;",
+        "  background-image: none;",
         "  color: @term_fg;",
         "  caret-color: @term_caret;",
         "}",
         "textview text selection {",
         "  background-color: @term_sel_bg;",
         "  color: @term_sel_fg;",
+        "}",
+        "/* GtkSourceView line numbers gutter */",
+        "textview border, textview.view border {",
+        "  background-color: @term_bg;",
+        "  color: alpha(@term_fg, 0.5);",
+        "}",
+        "textview.view gutter, textview gutter {",
+        "  background-color: @term_bg;",
+        "}",
+        "textview.view gutter.left, textview.view gutter.right {",
+        "  background-color: @term_bg;",
         "}",
         "headerbar, .titlebar {",
         "  background-color: @term_bg;",
@@ -130,11 +155,66 @@ def _css_from_palette(pal: Dict[str, Optional[str]], *, dark: bool) -> str:
         "  background-color: @term_sel_bg;",
         "  color: @term_sel_fg;",
         "}",
+        "/* Floating find/replace bar styling */",
+        "stack {",
+        "  background-color: @term_bg;",
+        "  border: 1px solid alpha(@term_fg, 0.2);",
+        "  border-radius: 8px;",
+        "  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);",
+        "}",
+        "/* Tab bar theming */",
+        "tabbar, tabbar > scrolledwindow, tabbar > revealer > box {",
+        "  background-color: @term_bg;",
+        "}",
+        "tabbar separator {",
+        "  background: transparent;",
+        "  min-width: 0;",
+        "  min-height: 0;",
+        "}",
+        "tabbar tab, .tab {",
+        "  background-color: alpha(@term_fg, 0.02);",
+        "  color: alpha(@term_fg, 0.5);",
+        "  border: none;",
+        "  border-bottom: 2px solid transparent;",
+        "  min-height: 28px;",
+        "  min-width: 160px;",
+        "  padding: 4px 14px;",
+        "}",
+        "tabbar tab > box, .tab > box {",
+        "  min-width: 0;",
+        "}",
+        "tabbar tab:hover, .tab:hover {",
+        "  background-color: alpha(@term_fg, 0.05);",
+        "  color: alpha(@term_fg, 0.8);",
+        "}",
+        (
+            "tabbar tab:selected, tabbar tab:checked, tabbar tab:active, "
+            ".tab:selected, .tab:checked, .tab:active {"
+        ),
+        "  background-color: alpha(@term_fg, 0.12);",
+        "  color: @term_fg;",
+        "  border-bottom: 2px solid alpha(@term_fg, 0.5);",
+        "  font-weight: 500;",
+        "}",
+        "tabbar .start-action, tabbar .end-action {",
+        "  background-color: @term_bg;",
+        "}",
+        "tabbar button {",
+        "  background: transparent;",
+        "  border: none;",
+        "  color: alpha(@term_fg, 0.5);",
+        "  min-height: 24px;",
+        "  min-width: 24px;",
+        "}",
+        "tabbar button:hover {",
+        "  color: @term_fg;",
+        "  background-color: alpha(@term_fg, 0.15);",
+        "}",
     ]
     return "\n".join(css)
 
 # -------------------- detect active Omarchy theme dir --------------------
-def _omarchy_current_dir() -> Optional[Path]:
+def _omarchy_current_dir() -> Path | None:
     if OMARCHY_CURTHEME.exists():
         return OMARCHY_CURTHEME
 
@@ -181,7 +261,7 @@ IMPORT_LINE_RE = re.compile(r'(?mi)^\s*(imports?|import)\s*:\s*(?P<val>.+)$')
 QUOTED_PATH_RE = re.compile(r'"([^"]+)"|\'([^\']+)\'')
 DASHED_ITEM_RE = re.compile(r'(?mi)^\s*-\s*(?:"([^"]+)"|\'([^\']+)\')\s*$')
 
-def _parse_alacritty(path: Path) -> Optional[Dict[str, Optional[str]]]:
+def _parse_alacritty(path: Path) -> dict[str, str | None] | None:
     if not path.exists():
         return None
     text = _read(path)
@@ -229,7 +309,9 @@ def _parse_alacritty(path: Path) -> Optional[Dict[str, Optional[str]]]:
         "caret": _norm_hex(caret) or caret,
     }
 
-def _collect_imports_text(main_path: Path, visited: Set[Path], depth: int = 0, max_depth: int = 8) -> str:
+def _collect_imports_text(
+    main_path: Path, visited: set[Path], depth: int = 0, max_depth: int = 8
+) -> str:
     if depth > max_depth:
         return ""
     try:
@@ -257,7 +339,9 @@ def _collect_imports_text(main_path: Path, visited: Set[Path], depth: int = 0, m
         if not paths and (val == "" or val.endswith(":") or val in ("|", ">")):
             after = txt[m.end():]
             for line in after.splitlines():
-                if line.strip().startswith(("#", "colors:", "primary:", "cursor:", "selection:", "schemes:", "themes:")):
+                if line.strip().startswith(
+                    ("#", "colors:", "primary:", "cursor:", "selection:", "schemes:", "themes:")
+                ):
                     break
                 dm = DASHED_ITEM_RE.match(line)
                 if dm:
@@ -277,9 +361,9 @@ def _collect_imports_text(main_path: Path, visited: Set[Path], depth: int = 0, m
     combined.append(txt)
     return "\n".join(filter(None, combined))
 
-def _palette_from_alacritty_text(txt: str) -> Dict[str, Optional[str]]:
+def _palette_from_alacritty_text(txt: str) -> dict[str, str | None]:
     out = _empty_palette()
-    def block_key(block: str, key: str) -> Optional[str]:
+    def block_key(block: str, key: str) -> str | None:
         pat = rf"(?mis)^\s*(?:colors\.\s*)?{block}\s*[:=].*?^\s*{key}\s*[:=]\s*(?P<x>{HEX_RE})"
         m = re.search(pat, txt)
         return _norm_hex(m.group("x")) if m else None
@@ -291,9 +375,9 @@ def _palette_from_alacritty_text(txt: str) -> Dict[str, Optional[str]]:
     return out
 
 # -------------------- kitty / foot parsers --------------------
-def _palette_from_kitty_text(txt: str) -> Dict[str, Optional[str]]:
+def _palette_from_kitty_text(txt: str) -> dict[str, str | None]:
     out = _empty_palette()
-    def grab(k: str) -> Optional[str]:
+    def grab(k: str) -> str | None:
         m = re.search(rf"(?mi)^\s*{k}\s+({HEX_RE})", txt)
         return _norm_hex(m.group(1)) if m else None
     out["bg"]    = grab("background")
@@ -303,9 +387,9 @@ def _palette_from_kitty_text(txt: str) -> Dict[str, Optional[str]]:
     out["sel_fg"]= grab("selection_foreground")
     return out
 
-def _palette_from_foot_text(txt: str) -> Dict[str, Optional[str]]:
+def _palette_from_foot_text(txt: str) -> dict[str, str | None]:
     out = _empty_palette()
-    def grab(k: str) -> Optional[str]:
+    def grab(k: str) -> str | None:
         m = re.search(rf"(?mi)^\s*{k}\s*=\s*({HEX_RE})", txt)
         return _norm_hex(m.group(1)) if m else None
     out["bg"]    = grab("background")
@@ -316,7 +400,7 @@ def _palette_from_foot_text(txt: str) -> Dict[str, Optional[str]]:
     return out
 
 # -------------------- palette sources --------------------
-def _palette_from_theme_dir(theme_dir: Path) -> Dict[str, Optional[str]]:
+def _palette_from_theme_dir(theme_dir: Path) -> dict[str, str | None]:
     for fname in ("alacritty.toml", "alacritty.yaml", "alacritty.yml"):
         f = theme_dir / fname
         if f.exists():
@@ -332,19 +416,19 @@ def _palette_from_theme_dir(theme_dir: Path) -> Dict[str, Optional[str]]:
         return _palette_from_foot_text(_read(f))
     return _empty_palette()
 
-def _from_env() -> Dict[str, Optional[str]]:
+def _from_env() -> dict[str, str | None]:
     out = {
-        "bg":     os.getenv("MICROPAD_BG"),
-        "fg":     os.getenv("MICROPAD_FG"),
-        "sel_bg": os.getenv("MICROPAD_SEL_BG"),
-        "sel_fg": os.getenv("MICROPAD_SEL_FG"),
-        "caret":  os.getenv("MICROPAD_CARET"),
+        "bg":     _getenv("MICROPAD_BG"),
+        "fg":     _getenv("MICROPAD_FG"),
+        "sel_bg": _getenv("MICROPAD_SEL_BG"),
+        "sel_fg": _getenv("MICROPAD_SEL_FG"),
+        "caret":  _getenv("MICROPAD_CARET"),
     }
     if any(out.values()):
-        _dbg("Using MICROPAD_* env overrides.")
+        _dbg("Using OMNOTE_* (or legacy MICROPAD_*) env overrides.")
     return out
 
-def _from_omarchy_theme() -> Dict[str, Optional[str]]:
+def _from_omarchy_theme() -> dict[str, str | None]:
     td = _omarchy_current_dir()
     if not td:
         _dbg("Omarchy current theme not detected.")
@@ -356,7 +440,7 @@ def _from_omarchy_theme() -> Dict[str, Optional[str]]:
     _dbg("Omarchy theme had no terminal palette files.")
     return _empty_palette()
 
-def _from_alacritty_config() -> Dict[str, Optional[str]]:
+def _from_alacritty_config() -> dict[str, str | None]:
     cands: list[Path] = []
     envp = os.getenv("ALACRITTY_CONFIG")
     if envp:
@@ -391,10 +475,10 @@ def _from_alacritty_config() -> Dict[str, Optional[str]]:
     _dbg("Alacritty palette not found.")
     return _empty_palette()
 
-def _from_gtk_defaults() -> Dict[str, Optional[str]]:
+def _from_gtk_defaults() -> dict[str, str | None]:
     return _empty_palette()
 
-def _merge_pref(*dicts: Dict[str, Optional[str]]) -> Dict[str, Optional[str]]:
+def _merge_pref(*dicts: dict[str, str | None]) -> dict[str, str | None]:
     out = _empty_palette()
     for d in dicts:
         for k, v in d.items():
@@ -403,7 +487,7 @@ def _merge_pref(*dicts: Dict[str, Optional[str]]) -> Dict[str, Optional[str]]:
     return out
 
 # -------------------- CSS application (GTK4-safe) --------------------
-def _apply_css(css: Optional[str] = None, path: Optional[Path] = None) -> None:
+def _apply_css(css: str | None = None, path: Path | None = None) -> None:
     global _CURRENT_PROVIDER
 
     disp = Gdk.Display.get_default()
@@ -412,7 +496,7 @@ def _apply_css(css: Optional[str] = None, path: Optional[Path] = None) -> None:
 
     if _CURRENT_PROVIDER is not None:
         try:
-            Gtk.StyleContext.remove_provider_for_display(disp, _CURRENT_PROVIDER)  # type: ignore
+            Gtk.StyleContext.remove_provider_for_display(disp, _CURRENT_PROVIDER)
         except Exception:
             pass
         _CURRENT_PROVIDER = None
@@ -420,14 +504,14 @@ def _apply_css(css: Optional[str] = None, path: Optional[Path] = None) -> None:
     if css is None and path is None:
         return
 
-    provider = Gtk.CssProvider()  # type: ignore
+    provider = Gtk.CssProvider()
     if css is not None:
         provider.load_from_data(css.encode("utf-8"))
     elif path is not None:
         provider.load_from_path(str(path))
 
     Gtk.StyleContext.add_provider_for_display(
-        disp, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION  # type: ignore
+        disp, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
     )
     _CURRENT_PROVIDER = provider
 
@@ -435,15 +519,15 @@ def _apply_css(css: Optional[str] = None, path: Optional[Path] = None) -> None:
 def apply_best_theme() -> None:
     """
     Priority:
-      0) MICROPAD_THEME_MODE=system → inherit system theme
+      0) OMNOTE_THEME_MODE=system → inherit system theme
       1) Omarchy active theme (palette)
       2) Alacritty main (palette)
-      3) MICROPAD_* env (palette)
+      3) OMNOTE_* env (palette)
       4) GTK defaults (no-op)
       5) Fallback: ~/.config/gtk-4.0/gtk.css
       6) Else: clear provider (inherit system)
     """
-    if os.getenv("MICROPAD_THEME_MODE", "").lower() == "system":
+    if _getenv("MICROPAD_THEME_MODE", "").lower() == "system":
         _dbg("Theme mode=system → clearing provider (inherit system).")
         _apply_css(None, None)
         return
@@ -458,7 +542,9 @@ def apply_best_theme() -> None:
     sm = Adw.StyleManager.get_default()
     is_dark = bool(getattr(sm, "get_dark", lambda: False)())
 
-    css_text: Optional[str] = _css_from_palette(merged, dark=is_dark) if isinstance(merged, dict) else None
+    css_text: str | None = (
+        _css_from_palette(merged, dark=is_dark) if isinstance(merged, dict) else None
+    )
     if css_text:
         _dbg("Using palette → CSS.")
         _apply_css(css=css_text)
@@ -485,7 +571,9 @@ class ThemeWatcher:
         self._monitors: list[Gio.FileMonitor] = []
         self._timeouts: set[int] = set()
         self._sm = Adw.StyleManager.get_default()
-        self._sm_handler: Optional[int] = self._sm.connect("notify::color-scheme", self._on_style_change)
+        self._sm_handler: int | None = self._sm.connect(
+            "notify::color-scheme", self._on_style_change
+        )
 
         for p in self._watch_paths():
             self._add_monitor(p)
@@ -524,12 +612,17 @@ class ThemeWatcher:
         cands = [
             OMARCHY_DIR,
             OMARCHY_THEMES,
-            Path("~/.config/omarchy/current/theme").expanduser(),
+            # Watch parent dir to detect symlink changes
+            Path("~/.config/omarchy/current").expanduser(),
             Path("~/.config/omarchy/current/theme/alacritty.toml").expanduser(),
             Path("~/.config/omarchy/current/theme/kitty.conf").expanduser(),
             Path("~/.config/omarchy/current/theme/foot.ini").expanduser(),
             HYPR_USER_CONF,
-            Path(os.getenv("ALACRITTY_CONFIG", "")).expanduser() if os.getenv("ALACRITTY_CONFIG") else None,
+            (
+                Path(os.getenv("ALACRITTY_CONFIG", "")).expanduser()
+                if os.getenv("ALACRITTY_CONFIG")
+                else None
+            ),
             Path("~/.config/alacritty").expanduser(),
             Path("~/.config/alacritty/alacritty.yml").expanduser(),
             Path("~/.config/alacritty/alacritty.yaml").expanduser(),
@@ -559,8 +652,11 @@ class ThemeWatcher:
         def _apply():
             try:
                 apply_best_theme()
-            finally:
-                return False  # one-shot timeout
+            except Exception:
+                pass
+            # Remove timeout ID from tracking set before returning
+            self._timeouts.discard(sid)
+            return False  # one-shot timeout
 
         sid = GLib.timeout_add(150, _apply)
         self._timeouts.add(sid)

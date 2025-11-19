@@ -1,36 +1,90 @@
-# src/omnote/window.py
 from __future__ import annotations
 
-from typing import Optional, Tuple
+from collections.abc import Callable
+from pathlib import Path
 
 from gi import require_version
+
 require_version("Gtk", "4.0")
 require_version("Adw", "1")
 require_version("Gdk", "4.0")
+require_version("GtkSource", "5")
 
-from gi.repository import Gtk, Gdk, Gio, Adw, GLib  # type: ignore
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk, GtkSource
 
-from .state import State
+from .state import State, TabState
+
+# Debug logging setup
+DEBUG_LOG = Path.home() / ".cache" / "omnote" / "debug.log"
+DEBUG_LOG.parent.mkdir(parents=True, exist_ok=True)
+
+def _log(msg: str) -> None:
+    """Write debug message to log file with size cap (1MB max)."""
+    try:
+        # Cap log size at 1MB to prevent unbounded growth
+        if DEBUG_LOG.exists() and DEBUG_LOG.stat().st_size > 1_000_000:
+            DEBUG_LOG.write_text(f"[Log rotated]\n{msg}\n")
+        else:
+            with open(DEBUG_LOG, "a") as f:
+                f.write(f"{msg}\n")
+    except Exception:
+        pass
+
+# Clear log at session start
+try:
+    DEBUG_LOG.write_text("")
+except Exception:
+    pass
 
 
-class MicroPadWindow(Adw.ApplicationWindow):  # type: ignore
-    """Main window with a TextView, inline Find/Replace, file ops, and a status bar (animated Stack)."""
+class DocumentTab:
+    """Represents a single document tab with its own view, buffer, and file state."""
+    def __init__(self) -> None:
+        self.view = GtkSource.View()
+        self.view.set_monospace(True)
+        self.view.set_show_line_numbers(False)
+        self.view.set_editable(True)
+        self.view.set_focusable(True)
 
-    def __init__(self, app: Adw.Application, state: State) -> None:  # type: ignore
+        # Disable GtkSourceView's built-in style scheme to use our CSS theme
+        buf = self.view.get_buffer()
+        buf.set_style_scheme(None)
+
+        self.view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        self.view.set_top_margin(12)
+        self.view.set_bottom_margin(12)
+        self.view.set_left_margin(14)
+        self.view.set_right_margin(14)
+
+        self.buffer = self.view.get_buffer()
+        self.file: Gio.File | None = None
+        self.changed = False
+
+        # Signal handlers
+        self.sid_changed: int | None = None
+        self.sid_mark: int | None = None
+
+
+class OmNoteWindow(Adw.ApplicationWindow):
+    """Main window with TextView, inline Find/Replace, file ops, and animated status bar."""
+
+    def __init__(self, app: Adw.Application, state: State) -> None:
         super().__init__(application=app)
         self.set_title("OmNote")
         self.set_default_size(900, 700)
 
         self.state = state
-        self._file: Optional[Gio.File] = None
-        self._changed = False
         self._closing = False
 
+        # Tab management
+        self.tab_view: Adw.TabView | None = None
+        self.tabs: dict[Adw.TabPage, DocumentTab] = {}  # Map TabPage to DocumentTab
+
         # timers / signal ids
-        self._status_tid: Optional[int] = None
-        self._search_tid: Optional[int] = None
-        self._sid_changed = None
-        self._sid_mark = None
+        self._status_tid: int | None = None
+        self._search_tid: int | None = None
+        # Track (widget, signal_id) pairs for cleanup - use Any for widget type
+        self._signal_ids: list[tuple[Gtk.Widget, int]] = []
 
         # ---------- layout ----------
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
@@ -51,11 +105,16 @@ class MicroPadWindow(Adw.ApplicationWindow):  # type: ignore
         find_btn.set_tooltip_text("Find (Ctrl+F)")
         repl_btn.set_tooltip_text("Replace (Ctrl+H)")
 
-        new_btn.connect("clicked", lambda *_: self._new_file())
-        open_btn.connect("clicked", lambda *_: self._open_dialog())
-        save_btn.connect("clicked", lambda *_: self._save_file())
-        find_btn.connect("clicked", lambda *_: self._show_find())
-        repl_btn.connect("clicked", lambda *_: self._show_replace())
+        sid = new_btn.connect("clicked", lambda *_: self._new_file())
+        self._signal_ids.append((new_btn, sid))
+        sid = open_btn.connect("clicked", lambda *_: self._open_dialog())
+        self._signal_ids.append((open_btn, sid))
+        sid = save_btn.connect("clicked", lambda *_: self._save_file())
+        self._signal_ids.append((save_btn, sid))
+        sid = find_btn.connect("clicked", lambda *_: self._show_find())
+        self._signal_ids.append((find_btn, sid))
+        sid = repl_btn.connect("clicked", lambda *_: self._show_replace())
+        self._signal_ids.append((repl_btn, sid))
 
         self.header.pack_start(new_btn)
         self.header.pack_start(open_btn)
@@ -65,13 +124,22 @@ class MicroPadWindow(Adw.ApplicationWindow):  # type: ignore
 
         root.append(self.header)
 
+        # Create overlay container for floating find/replace bars
+        overlay = Gtk.Overlay()
+        overlay.set_vexpand(True)
+        overlay.set_hexpand(True)
+
         # top bar stack container (hidden when idle; animates when shown)
         self.top_stack = Gtk.Stack()
         self.top_stack.set_transition_type(Gtk.StackTransitionType.SLIDE_DOWN)
-        self.top_stack.set_hexpand(True)
+        self.top_stack.set_hexpand(False)  # Don't expand horizontally
         self.top_stack.set_vexpand(False)
         self.top_stack.set_visible(False)  # collapse when no bar is shown
-        self.top_stack.connect("notify::transition-running", self._on_stack_transition)
+        self.top_stack.set_halign(Gtk.Align.CENTER)  # Center horizontally
+        self.top_stack.set_valign(Gtk.Align.START)  # Align to top
+        self.top_stack.set_margin_top(8)
+        sid = self.top_stack.connect("notify::transition-running", self._on_stack_transition)
+        self._signal_ids.append((self.top_stack, sid))
 
         # find bar
         self.find_box = Gtk.Box(
@@ -82,15 +150,25 @@ class MicroPadWindow(Adw.ApplicationWindow):  # type: ignore
         self.find_entry = Gtk.SearchEntry()
         self.find_entry.set_placeholder_text("Find…")
         self.find_entry.set_focusable(True)
-        self.find_entry.connect("search-changed", self._on_find_changed)
-        self.find_entry.connect("activate", self._on_find_activate)
+        sid = self.find_entry.connect("search-changed", self._on_find_changed)
+        self._signal_ids.append((self.find_entry, sid))
+        sid = self.find_entry.connect("activate", self._on_find_activate)
+        self._signal_ids.append((self.find_entry, sid))
+
+        # Escape key handler for find bar
+        find_key_ctrl = Gtk.EventControllerKey()
+        find_key_ctrl.connect("key-pressed", self._on_find_key_pressed)
+        self.find_entry.add_controller(find_key_ctrl)
 
         self.find_prev_btn = Gtk.Button.new_with_mnemonic("_Prev")
-        self.find_prev_btn.connect("clicked", lambda *_: self.find_next(forward=False))
+        sid = self.find_prev_btn.connect("clicked", lambda *_: self.find_next(forward=False))
+        self._signal_ids.append((self.find_prev_btn, sid))
         self.find_next_btn = Gtk.Button.new_with_mnemonic("_Next")
-        self.find_next_btn.connect("clicked", lambda *_: self.find_next(forward=True))
+        sid = self.find_next_btn.connect("clicked", lambda *_: self.find_next(forward=True))
+        self._signal_ids.append((self.find_next_btn, sid))
         self.find_close_btn = Gtk.Button.new_with_mnemonic("_Close")
-        self.find_close_btn.connect("clicked", lambda *_: self._hide_find())
+        sid = self.find_close_btn.connect("clicked", lambda *_: self._hide_find())
+        self._signal_ids.append((self.find_close_btn, sid))
 
         for w in (self.find_entry, self.find_prev_btn, self.find_next_btn, self.find_close_btn):
             self.find_box.append(w)
@@ -108,16 +186,35 @@ class MicroPadWindow(Adw.ApplicationWindow):  # type: ignore
         self.replace_with_entry.set_placeholder_text("Replace with…")
         self.replace_with_entry.set_focusable(True)
 
+        # Escape key handlers for replace bar
+        replace_find_key_ctrl = Gtk.EventControllerKey()
+        replace_find_key_ctrl.connect("key-pressed", self._on_replace_key_pressed)
+        self.replace_find_entry.add_controller(replace_find_key_ctrl)
+
+        replace_with_key_ctrl = Gtk.EventControllerKey()
+        replace_with_key_ctrl.connect("key-pressed", self._on_replace_key_pressed)
+        self.replace_with_entry.add_controller(replace_with_key_ctrl)
+
         self.replace_one_btn = Gtk.Button(label="Replace")
         self.replace_all_btn = Gtk.Button(label="Replace All")
         self.replace_close_btn = Gtk.Button(label="Close")
 
-        self.replace_find_entry.connect("changed", self._on_replace_find_changed)
-        self.replace_find_entry.connect("activate", lambda *_: self.find_next(forward=True, use_replace_field=True))
-        self.replace_with_entry.connect("activate", lambda *_: self._replace_current_or_next())
-        self.replace_one_btn.connect("clicked", lambda *_: self._replace_current_or_next())
-        self.replace_all_btn.connect("clicked", lambda *_: self._replace_all())
-        self.replace_close_btn.connect("clicked", lambda *_: self._hide_replace())
+        sid = self.replace_find_entry.connect("changed", self._on_replace_find_changed)
+        self._signal_ids.append((self.replace_find_entry, sid))
+        sid = self.replace_find_entry.connect(
+            "activate", lambda *_: self.find_next(forward=True, use_replace_field=True)
+        )
+        self._signal_ids.append((self.replace_find_entry, sid))
+        sid = self.replace_with_entry.connect(
+            "activate", lambda *_: self._replace_current_or_next()
+        )
+        self._signal_ids.append((self.replace_with_entry, sid))
+        sid = self.replace_one_btn.connect("clicked", lambda *_: self._replace_current_or_next())
+        self._signal_ids.append((self.replace_one_btn, sid))
+        sid = self.replace_all_btn.connect("clicked", lambda *_: self._replace_all())
+        self._signal_ids.append((self.replace_all_btn, sid))
+        sid = self.replace_close_btn.connect("clicked", lambda *_: self._hide_replace())
+        self._signal_ids.append((self.replace_close_btn, sid))
 
         for w in (
             self.replace_find_entry,
@@ -137,29 +234,48 @@ class MicroPadWindow(Adw.ApplicationWindow):  # type: ignore
         self.top_stack.add_named(self.empty_bar, "empty")
         self.top_stack.set_visible_child_name("empty")
 
-        root.append(self.top_stack)
+        # Create container for tabs (will be the base layer of overlay)
+        tabs_container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        tabs_container.set_vexpand(True)
+        tabs_container.set_hexpand(True)
 
-        # editor
-        self.view = Gtk.TextView()
-        self.view.set_monospace(True)
-        self.view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
-        self.view.set_top_margin(12)
-        self.view.set_bottom_margin(12)
-        self.view.set_left_margin(14)
-        self.view.set_right_margin(14)
+        # Tab bar
+        tab_bar = Adw.TabBar()
+        tab_bar.set_expand_tabs(False)  # Fixed-width tabs like Firefox
+        tabs_container.append(tab_bar)
 
-        self.buffer = self.view.get_buffer()
-        self._sid_changed = self.buffer.connect("changed", self._on_buffer_changed)
-        self._sid_mark = self.buffer.connect("mark-set", self._on_mark_set)
+        # Tab view for multi-document interface
+        self.tab_view = Adw.TabView()
+        self.tab_view.set_vexpand(True)
+        self.tab_view.set_hexpand(True)
+        tab_bar.set_view(self.tab_view)
 
-        scroller = Gtk.ScrolledWindow(hexpand=True, vexpand=True)
-        scroller.set_child(self.view)
-        scroller.set_margin_top(6)
-        scroller.set_margin_bottom(6)
-        scroller.set_margin_start(8)
-        scroller.set_margin_end(8)
+        # Use CONTROL_TAB shortcuts (Ctrl+Tab, Ctrl+Shift+Tab) for tab switching
+        # This disables Ctrl+Home/End/PgUp/PgDn so they work in the text editor
+        self.tab_view.set_shortcuts(Adw.TabViewShortcuts.CONTROL_TAB)
 
-        root.append(scroller)
+        # Connect tab change signal
+        sid = self.tab_view.connect("notify::selected-page", self._on_tab_changed)
+        self._signal_ids.append((self.tab_view, sid))
+
+        # Tab view wrapper with margins
+        tab_view_wrapper = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        tab_view_wrapper.set_margin_top(6)
+        tab_view_wrapper.set_margin_bottom(6)
+        tab_view_wrapper.set_margin_start(8)
+        tab_view_wrapper.set_margin_end(8)
+        tab_view_wrapper.append(self.tab_view)
+
+        tabs_container.append(tab_view_wrapper)
+
+        # Set tabs_container as base layer of overlay
+        overlay.set_child(tabs_container)
+
+        # Add floating find/replace bar as overlay
+        overlay.add_overlay(self.top_stack)
+
+        # Add overlay to root
+        root.append(overlay)
 
         # footer / status
         self.status_box = Gtk.Box(
@@ -176,29 +292,159 @@ class MicroPadWindow(Adw.ApplicationWindow):  # type: ignore
         self._install_file_accels()
         self._install_shortcuts()
 
-        # session restore
-        if getattr(self.state, "last_file", None):
-            f = Gio.File.new_for_path(self.state.last_file)  # type: ignore[attr-defined]
-            self._open_file_gfile(f)
+        # Restore tabs from state
+        if self.state.tabs:
+            for _i, tab_state in enumerate(self.state.tabs):
+                if tab_state.file_path:
+                    # Tab with saved file
+                    f = Gio.File.new_for_path(tab_state.file_path)
+                    page = self._create_tab(Path(tab_state.file_path).name, f)
+                    doc_tab = self.tabs[page]
+                    doc_tab.view.set_show_line_numbers(tab_state.show_line_numbers)
+                    self._open_file_gfile(f, tab_state)
+                else:
+                    # Tab without file - restore unsaved content
+                    page = self._create_tab()
+                    doc_tab = self.tabs[page]
+                    doc_tab.view.set_show_line_numbers(tab_state.show_line_numbers)
 
-        GLib.idle_add(self.view.grab_focus)
-        GLib.idle_add(self._update_status)
+                    # Restore buffer content if available
+                    if tab_state.unsaved_content:
+                        doc_tab.buffer.set_text(tab_state.unsaved_content)
+                        # Restore cursor position
+                        try:
+                            it = doc_tab.buffer.get_iter_at_line_offset(
+                                tab_state.cursor_line, tab_state.cursor_col
+                            )
+                            doc_tab.buffer.place_cursor(it)
+                        except Exception:
+                            pass
+                        # Reset changed flag since we just loaded saved content
+                        doc_tab.changed = False
+
+                    # Ensure view is editable and focusable
+                    doc_tab.view.set_editable(True)
+                    doc_tab.view.set_focusable(True)
+
+            # Select the previously active tab
+            if (
+                self.tab_view
+                and 0 <= self.state.active_tab_index < self.tab_view.get_n_pages()
+            ):
+                page = self.tab_view.get_nth_page(self.state.active_tab_index)
+                self.tab_view.set_selected_page(page)
+        else:
+            # No saved tabs, create a blank one
+            self._create_tab()
+
+        # Focus and update
+        def _initial_focus():
+            view = self._get_current_view()
+            if view:
+                view.grab_focus()
+            self._update_status()
+            return False
+
+        GLib.idle_add(_initial_focus)
 
         # clean shutdown
         self.connect("close-request", self._on_close_request)
 
+    # ---------- tab management helpers ----------
+
+    def _get_current_tab(self) -> DocumentTab | None:
+        """Get the currently active DocumentTab, or None."""
+        if not self.tab_view:
+            return None
+        page = self.tab_view.get_selected_page()
+        return self.tabs.get(page) if page else None
+
+    def _get_current_view(self) -> GtkSource.View | None:
+        """Get the view for the current tab."""
+        tab = self._get_current_tab()
+        return tab.view if tab else None
+
+    def _get_current_buffer(self) -> Gtk.TextBuffer | None:
+        """Get the buffer for the current tab."""
+        tab = self._get_current_tab()
+        return tab.buffer if tab else None
+
+    def _create_tab(self, title: str = "Untitled", file: Gio.File | None = None) -> Adw.TabPage:
+        """Create a new tab with a DocumentTab."""
+        assert self.tab_view is not None
+        doc_tab = DocumentTab()
+        doc_tab.file = file
+
+        # Connect buffer signals
+        doc_tab.sid_changed = doc_tab.buffer.connect("changed", self._on_buffer_changed)
+        doc_tab.sid_mark = doc_tab.buffer.connect("mark-set", self._on_mark_set)
+
+        # Wrap view in scrolled window
+        scroller = Gtk.ScrolledWindow(hexpand=True, vexpand=True)
+        scroller.set_child(doc_tab.view)
+
+        # Add to tab view
+        page = self.tab_view.append(scroller)
+        page.set_title(title)
+        self.tabs[page] = doc_tab
+
+        return page
+
+    def _close_tab(self, page: Adw.TabPage) -> bool:
+        """Close a tab. Returns False if user cancels."""
+        assert self.tab_view is not None
+        doc_tab = self.tabs.get(page)
+        if not doc_tab:
+            return True
+
+        # Check if modified
+        if doc_tab.changed and not self._confirm_discard():
+            return False
+
+        # Disconnect signals
+        if doc_tab.sid_changed:
+            doc_tab.buffer.disconnect(doc_tab.sid_changed)
+        if doc_tab.sid_mark:
+            doc_tab.buffer.disconnect(doc_tab.sid_mark)
+
+        # Remove from tracking
+        del self.tabs[page]
+
+        # Close the tab
+        self.tab_view.close_page(page)
+
+        # If no tabs left, create a new one
+        if self.tab_view.get_n_pages() == 0:
+            self._create_tab()
+
+        return True
+
+    def _on_tab_changed(self, tab_view: Adw.TabView, param) -> None:
+        """Called when the selected tab changes."""
+        if self._closing:
+            return
+        self._update_status()
+        self._update_title()
+        view = self._get_current_view()
+        if view:
+            GLib.idle_add(lambda: (view.grab_focus(), False)[1])
+
     # ---------- helper: bar visibility / focus coordination with animation ----------
 
-    def _set_bar(self, name: Optional[str]) -> None:
+    def _set_bar(self, name: str | None) -> None:
         """
         Show given bar ('find' or 'replace') with slide-down, or hide with slide-up.
         We collapse the stack (set_visible(False)) only after the hide animation finishes.
         """
+        view = self._get_current_view()
+        if not view:
+            return
+
         if name is None:
             # hide with slide-up transition
             self.top_stack.set_transition_type(Gtk.StackTransitionType.SLIDE_UP)
             self.top_stack.set_visible_child_name("empty")
-            self.view.set_focusable(True)
+            view.set_focusable(True)
             # actual set_visible(False) happens in _on_stack_transition when animation ends
             return
 
@@ -206,7 +452,7 @@ class MicroPadWindow(Adw.ApplicationWindow):  # type: ignore
         self.top_stack.set_visible(True)  # make space so animation is visible
         self.top_stack.set_transition_type(Gtk.StackTransitionType.SLIDE_DOWN)
         self.top_stack.set_visible_child_name(name)
-        self.view.set_focusable(False)  # keep TextView from stealing focus
+        view.set_focusable(False)  # keep TextView from stealing focus
 
     def _on_stack_transition(self, *_args) -> None:
         """
@@ -224,16 +470,25 @@ class MicroPadWindow(Adw.ApplicationWindow):  # type: ignore
         if self.top_stack.get_visible_child_name() == "empty":
             self.top_stack.set_visible(False)
             # make sure the editor regains focus after collapse
-            GLib.idle_add(self.view.grab_focus)
+            def _refocus():
+                view = self._get_current_view()
+                if view:
+                    view.grab_focus()
+                return False
+            GLib.idle_add(_refocus)
 
     # ---------- actions, shortcuts ----------
 
     def _install_file_accels(self) -> None:
-        actions: dict[str, tuple[callable, list[str]]] = {
-            "new": (self._new_file, ["<Primary>n"]),
+        actions: dict[str, tuple[Callable[[], None], list[str]]] = {
+            "new": (self._new_file, ["<Primary>n", "<Primary>t"]),  # Ctrl+N or Ctrl+T for new tab
             "open": (self._open_dialog, ["<Primary>o"]),
             "save": (self._save_file, ["<Primary>s"]),
             "quit": (self._maybe_close, ["<Primary>q"]),
+            "close-tab": (self._close_current_tab, ["<Primary>w"]),  # Ctrl+W to close tab
+            "toggle-line-numbers": (self._toggle_line_numbers, ["<Primary>l"]),
+            "next-tab": (self._next_tab, ["<Primary>Tab"]),  # Ctrl+Tab
+            "prev-tab": (self._prev_tab, ["<Primary><Shift>Tab"]),  # Ctrl+Shift+Tab
         }
         for name, (cb, accels) in actions.items():
             act = Gio.SimpleAction.new(name, None)
@@ -261,20 +516,44 @@ class MicroPadWindow(Adw.ApplicationWindow):  # type: ignore
 
         self.add_controller(ctrl)
 
+    def _toggle_line_numbers(self) -> None:
+        """Toggle line numbers on/off in the GtkSourceView."""
+        view = self._get_current_view()
+        if not view:
+            return
+        current = view.get_show_line_numbers()
+        view.set_show_line_numbers(not current)
+        _log(f"Line numbers toggled: {current} -> {not current}")
+
+    def _close_current_tab(self) -> None:
+        """Close the currently active tab."""
+        assert self.tab_view is not None
+        page = self.tab_view.get_selected_page()
+        if page:
+            self._close_tab(page)
+
+    def _next_tab(self) -> None:
+        """Switch to the next tab."""
+        if self.tab_view:
+            self.tab_view.select_next_page()
+
+    def _prev_tab(self) -> None:
+        """Switch to the previous tab."""
+        if self.tab_view:
+            self.tab_view.select_previous_page()
+
     # ---------- file ops ----------
 
     def _new_file(self) -> None:
-        if self._changed and not self._confirm_discard():
-            return
-        self.buffer.set_text("")
-        self._file = None
-        self._changed = False
+        # Create a new tab instead of clearing current one
+        assert self.tab_view is not None
+        page = self._create_tab()
+        self.tab_view.set_selected_page(page)
         self._update_title()
         self._queue_status(10)
 
     def _open_dialog(self) -> None:
-        if self._changed and not self._confirm_discard():
-            return
+        # Open in new tab
         dlg = Gtk.FileDialog()
         dlg.set_title("Open File")
         dlg.open(self, None, self._on_open_done)
@@ -287,54 +566,97 @@ class MicroPadWindow(Adw.ApplicationWindow):  # type: ignore
         except GLib.Error:
             return
         if f:
+            assert self.tab_view is not None
+            # Create new tab for the file
+            filename = f.get_basename() or "Untitled"
+            page = self._create_tab(filename, f)
+            self.tab_view.set_selected_page(page)
             self._open_file_gfile(f)
 
-    def _open_file_gfile(self, f: Gio.File) -> None:
+    def _open_file_gfile(
+        self, f: Gio.File, tab_state: TabState | None = None, target_tab: DocumentTab | None = None
+    ) -> None:
+        # Use specific tab if provided, otherwise current tab
+        tab = target_tab if target_tab else self._get_current_tab()
+        if not tab:
+            return
+
         def _finish(obj: Gio.File, res: Gio.AsyncResult) -> None:
             if self._closing:
                 return
-            try:
-                stream = obj.read_finish(res)
-            except GLib.Error:
+            # Verify tab still exists in our tracking (wasn't closed during async operation)
+            if tab not in [t for t in self.tabs.values()]:
                 return
             try:
-                data = stream.read_bytes(10_000_000, None).get_data().decode("utf-8", errors="replace")
-            except Exception:
-                data = ""
-            self.buffer.set_text(data)
-            self._file = f
-            self._changed = False
-            self.state.last_file = f.get_path() or ""  # type: ignore[attr-defined]
-            self.state.save()
+                stream = obj.read_finish(res)
+            except GLib.Error as e:
+                self._show_error_dialog("Failed to Open File", f"Could not read file:\n{e.message}")
+                return
+            try:
+                data = (
+                    stream.read_bytes(10_000_000, None).get_data().decode("utf-8", errors="replace")
+                )
+            except Exception as e:
+                self._show_error_dialog("Failed to Read File", f"Error decoding file:\n{str(e)}")
+                return
+            tab.buffer.set_text(data)
+            tab.file = f
+            tab.changed = False
+
+            # Restore cursor position if provided
+            if tab_state:
+                try:
+                    it = tab.buffer.get_iter_at_line_offset(
+                        tab_state.cursor_line, tab_state.cursor_col
+                    )
+                    tab.buffer.place_cursor(it)
+                    if tab.view:
+                        tab.view.scroll_to_iter(it, 0.0, False, 0.0, 0.0)
+                except Exception:
+                    pass
+
             self._update_title()
             self._queue_status(10)
 
         f.read_async(GLib.PRIORITY_DEFAULT, None, _finish)
 
     def _save_file(self) -> None:
-        if self._file is None:
+        tab = self._get_current_tab()
+        if not tab:
+            return
+
+        if tab.file is None:
             self._save_as_dialog()
             return
 
+        # Capture file reference and data before async operation
+        file_to_save = tab.file
         text = self._get_text()
         data = text.encode("utf-8")
 
         def _finish(obj: Gio.File, res: Gio.AsyncResult) -> None:
             if self._closing:
                 return
+            # Verify tab still exists
+            if tab not in [t for t in self.tabs.values()]:
+                return
             try:
                 stream = obj.replace_finish(res)
-            except GLib.Error:
+            except GLib.Error as e:
+                self._show_error_dialog("Failed to Save File", f"Could not save file:\n{e.message}")
                 return
             try:
                 stream.write(data)
                 stream.close(None)
-            except Exception:
-                pass
-            self._changed = False
+            except Exception as e:
+                self._show_error_dialog("Failed to Write File", f"Error writing file:\n{str(e)}")
+                return
+            # Only mark as saved if the file reference hasn't changed
+            if tab.file == file_to_save:
+                tab.changed = False
             self._update_title()
 
-        self._file.replace_async(
+        file_to_save.replace_async(
             None, False, Gio.FileCreateFlags.REPLACE_DESTINATION,
             GLib.PRIORITY_DEFAULT, None, _finish
         )
@@ -345,7 +667,8 @@ class MicroPadWindow(Adw.ApplicationWindow):  # type: ignore
         dlg.save(self, None, self._on_save_done)
 
     def _on_save_done(self, dlg: Gtk.FileDialog, res: Gio.AsyncResult) -> None:
-        if self._closing:
+        tab = self._get_current_tab()
+        if self._closing or not tab:
             return
         try:
             f = dlg.save_finish(res)
@@ -353,34 +676,73 @@ class MicroPadWindow(Adw.ApplicationWindow):  # type: ignore
             return
         if not f:
             return
-        self._file = f
-        self.state.last_file = f.get_path() or ""  # type: ignore[attr-defined]
-        self.state.save()
+        tab.file = f
         self._save_file()
 
     def _maybe_close(self) -> None:
-        if self._changed and not self._confirm_discard():
+        tab = self._get_current_tab()
+        if tab and tab.changed and not self._confirm_discard():
             return
         self.close()
 
     def _confirm_discard(self) -> bool:
-        # TODO: real dialog
-        return True
+        """Show confirmation dialog for unsaved changes."""
+        dialog = Adw.MessageDialog.new(self)
+        dialog.set_heading("Unsaved Changes")
+        dialog.set_body("This document has unsaved changes. Discard them?")
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("discard", "Discard")
+        dialog.set_response_appearance("discard", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+
+        # Run modal and get response
+        response = [None]
+
+        def on_response(dlg, result):
+            response[0] = dlg.choose_finish(result)
+
+        dialog.choose(None, on_response)
+
+        # Process events until we get a response (simple modal approach)
+        while response[0] is None:
+            GLib.MainContext.default().iteration(True)
+
+        return response[0] == "discard"
+
+    def _show_error_dialog(self, title: str, message: str) -> None:
+        """Show error dialog to user."""
+        if self._closing:
+            return
+        dialog = Adw.MessageDialog.new(self)
+        dialog.set_heading(title)
+        dialog.set_body(message)
+        dialog.add_response("ok", "OK")
+        dialog.set_default_response("ok")
+        dialog.set_close_response("ok")
+        dialog.present()
 
     # ---------- buffer / status ----------
 
     def _get_text(self) -> str:
-        start = self.buffer.get_start_iter()
-        end = self.buffer.get_end_iter()
-        return self.buffer.get_text(start, end, True)
+        buf = self._get_current_buffer()
+        if not buf:
+            return ""
+        start = buf.get_start_iter()
+        end = buf.get_end_iter()
+        return buf.get_text(start, end, True)
 
     def _set_text(self, text: str) -> None:
-        self.buffer.set_text(text)
+        buf = self._get_current_buffer()
+        if buf:
+            buf.set_text(text)
 
     def _on_buffer_changed(self, *_args) -> None:
         if self._closing:
             return
-        self._changed = True
+        tab = self._get_current_tab()
+        if tab:
+            tab.changed = True
         self._update_title()
         self._queue_status(30)
 
@@ -398,23 +760,41 @@ class MicroPadWindow(Adw.ApplicationWindow):  # type: ignore
         self._status_tid = None
         if self._closing:
             return False
+
+        buf = self._get_current_buffer()
+        if not buf:
+            return False
+
         try:
-            insert_mark = self.buffer.get_insert()
-            it = self.buffer.get_iter_at_mark(insert_mark)
+            insert_mark = buf.get_insert()
+            it = buf.get_iter_at_mark(insert_mark)
             line = it.get_line() + 1
             col = it.get_line_offset() + 1
-            start = self.buffer.get_start_iter()
-            end = self.buffer.get_end_iter()
-            length = len(self.buffer.get_text(start, end, True))
+            start = buf.get_start_iter()
+            end = buf.get_end_iter()
+            length = len(buf.get_text(start, end, True))
             self.status_label.set_text(f"Ln: {line}  Col: {col}  |  Length: {length}")
         except Exception:
             pass
         return False
 
     def _update_title(self) -> None:
-        name = self._file.get_basename() if self._file else "Untitled"
-        dirty = " •" if self._changed else ""
+        tab = self._get_current_tab()
+        if not tab:
+            self.set_title("OmNote")
+            return
+
+        name = tab.file.get_basename() if tab.file else "Untitled"
+        dirty = " •" if tab.changed else ""
+
+        # Update window title
         self.set_title(f"OmNote — {name}{dirty}")
+
+        # Update tab title
+        if self.tab_view:
+            page = self.tab_view.get_selected_page()
+            if page:
+                page.set_title(f"{name}{dirty}")
 
     # ---------- find / replace ----------
 
@@ -442,11 +822,29 @@ class MicroPadWindow(Adw.ApplicationWindow):  # type: ignore
     def _hide_replace(self) -> None:
         self._set_bar(None)
 
+    def _on_find_key_pressed(self, _controller, keyval, _keycode, _state):
+        """Handle Escape key in find bar."""
+        if keyval == Gdk.KEY_Escape:
+            self._hide_find()
+            return True
+        return False
+
+    def _on_replace_key_pressed(self, _controller, keyval, _keycode, _state):
+        """Handle Escape key in replace bar."""
+        if keyval == Gdk.KEY_Escape:
+            self._hide_replace()
+            return True
+        return False
+
     def _force_focus_find(self) -> bool:
-        if self._closing or not self.top_stack.get_visible() or self.top_stack.get_visible_child_name() != "find":
+        if (
+            self._closing
+            or not self.top_stack.get_visible()
+            or self.top_stack.get_visible_child_name() != "find"
+        ):
             return False
         try:
-            self.set_focus(self.find_entry)  # type: ignore[arg-type]
+            self.set_focus(self.find_entry)
             self.find_entry.grab_focus()
             self.find_entry.set_position(-1)
         except Exception:
@@ -454,10 +852,14 @@ class MicroPadWindow(Adw.ApplicationWindow):  # type: ignore
         return False
 
     def _force_focus_replace(self) -> bool:
-        if self._closing or not self.top_stack.get_visible() or self.top_stack.get_visible_child_name() != "replace":
+        if (
+            self._closing
+            or not self.top_stack.get_visible()
+            or self.top_stack.get_visible_child_name() != "replace"
+        ):
             return False
         try:
-            self.set_focus(self.replace_find_entry)  # type: ignore[arg-type]
+            self.set_focus(self.replace_find_entry)
             self.replace_find_entry.grab_focus()
             self.replace_find_entry.set_position(-1)
         except Exception:
@@ -489,14 +891,15 @@ class MicroPadWindow(Adw.ApplicationWindow):  # type: ignore
         return False
 
     def _current_selection_text(self) -> str:
-        if self.buffer.get_has_selection():
-            s, e = self.buffer.get_selection_bounds()
-            return self.buffer.get_text(s, e, True)
+        buf = self._get_current_buffer()
+        if buf and buf.get_has_selection():
+            s, e = buf.get_selection_bounds()
+            return buf.get_text(s, e, True)
         return ""
 
     def _buffer_search(
         self, needle: str, start_iter: Gtk.TextIter, forward: bool
-    ) -> Optional[Tuple[Gtk.TextIter, Gtk.TextIter]]:
+    ) -> tuple[Gtk.TextIter, Gtk.TextIter] | None:
         if not needle:
             return None
         flags = Gtk.TextSearchFlags.CASE_INSENSITIVE
@@ -510,9 +913,18 @@ class MicroPadWindow(Adw.ApplicationWindow):  # type: ignore
     def find_next(self, forward: bool = True, use_replace_field: bool = False) -> None:
         if self._closing:
             return
+
+        buf = self._get_current_buffer()
+        view = self._get_current_view()
+        if not buf or not view:
+            return
+
         try:
-            buf = self.buffer
-            needle = self.replace_find_entry.get_text() if use_replace_field else self.find_entry.get_text()
+            needle = (
+                self.replace_find_entry.get_text()
+                if use_replace_field
+                else self.find_entry.get_text()
+            )
             if not needle:
                 return
 
@@ -531,14 +943,18 @@ class MicroPadWindow(Adw.ApplicationWindow):  # type: ignore
 
             mstart, mend = match
             buf.select_range(mstart, mend)
-            self.view.scroll_to_iter(mstart, 0.25, False, 0.0, 0.0)
+            view.scroll_to_iter(mstart, 0.25, False, 0.0, 0.0)
         except Exception:
             pass
 
     def _highlight_first_match(self, from_replace: bool) -> None:
         if self._closing:
             return
-        buf = self.buffer
+
+        buf = self._get_current_buffer()
+        if not buf:
+            return
+
         needle = self.replace_find_entry.get_text() if from_replace else self.find_entry.get_text()
         if not needle:
             return
@@ -551,7 +967,11 @@ class MicroPadWindow(Adw.ApplicationWindow):  # type: ignore
     def _replace_current_or_next(self) -> None:
         if self._closing:
             return
-        buf = self.buffer
+
+        buf = self._get_current_buffer()
+        if not buf:
+            return
+
         find_text = self.replace_find_entry.get_text()
         repl_text = self.replace_with_entry.get_text()
         if not find_text:
@@ -573,7 +993,11 @@ class MicroPadWindow(Adw.ApplicationWindow):  # type: ignore
     def _replace_all(self) -> None:
         if self._closing:
             return
-        buf = self.buffer
+
+        buf = self._get_current_buffer()
+        if not buf:
+            return
+
         find_text = self.replace_find_entry.get_text()
         repl_text = self.replace_with_entry.get_text()
         if not find_text:
@@ -592,8 +1016,83 @@ class MicroPadWindow(Adw.ApplicationWindow):  # type: ignore
 
     # ---------- teardown ----------
 
+    def _save_all_tab_states(self) -> None:
+        """Save all current tab states to persistent storage."""
+        if not self.tab_view:
+            return
+        _log("=== Starting state save ===")
+        tab_states = []
+        for i in range(self.tab_view.get_n_pages()):
+            page = self.tab_view.get_nth_page(i)
+            tab = self.tabs.get(page)
+            if not tab:
+                _log(f"Tab {i}: No DocumentTab found")
+                continue
+
+            # Get cursor position
+            cursor_line = 0
+            cursor_col = 0
+            try:
+                insert_mark = tab.buffer.get_insert()
+                it = tab.buffer.get_iter_at_mark(insert_mark)
+                cursor_line = it.get_line()
+                cursor_col = it.get_line_offset()
+            except Exception as e:
+                _log(f"Tab {i}: Error getting cursor position: {e}")
+
+            file_path = tab.file.get_path() if tab.file else None
+            show_lines = tab.view.get_show_line_numbers() if tab.view else False
+
+            # Save buffer content if there's no file (unsaved tab)
+            unsaved_content = None
+            if not file_path:
+                try:
+                    start = tab.buffer.get_start_iter()
+                    end = tab.buffer.get_end_iter()
+                    unsaved_content = tab.buffer.get_text(start, end, True)
+                except Exception as e:
+                    _log(f"Tab {i}: Error getting buffer content: {e}")
+
+            tab_state = TabState(
+                file_path=file_path,
+                cursor_line=cursor_line,
+                cursor_col=cursor_col,
+                show_line_numbers=show_lines,
+                unsaved_content=unsaved_content,
+            )
+            tab_states.append(tab_state)
+            content_preview = f", content={len(unsaved_content)} chars" if unsaved_content else ""
+            _log(
+                f"Tab {i}: file={file_path}, cursor={cursor_line}:{cursor_col}, "
+                f"lines={show_lines}{content_preview}"
+            )
+
+        # Update state
+        self.state.tabs = tab_states
+        selected_page = self.tab_view.get_selected_page()
+        if selected_page:
+            active_idx = self.tab_view.get_page_position(selected_page)
+        else:
+            active_idx = 0
+
+        # Invariant: active index must be within tab bounds
+        assert 0 <= active_idx < len(tab_states) if tab_states else active_idx == 0
+        self.state.active_tab_index = active_idx
+
+        _log(f"Saving {len(tab_states)} tabs, active={active_idx}")
+        self.state.save()
+        _log("State saved successfully")
+
     def _on_close_request(self, *_args):
         self._closing = True
+
+        # Save all tab states before closing
+        try:
+            self._save_all_tab_states()
+        except Exception as e:
+            _log(f"ERROR: Failed to save tab states: {e}")
+            import traceback
+            _log(traceback.format_exc())
 
         for tid in (self._status_tid, self._search_tid):
             if tid:
@@ -604,14 +1103,26 @@ class MicroPadWindow(Adw.ApplicationWindow):  # type: ignore
         self._status_tid = None
         self._search_tid = None
 
-        for sid in (self._sid_changed, self._sid_mark):
-            if sid:
+        # Disconnect all tab signals
+        for _page, tab in self.tabs.items():
+            if tab.sid_changed:
                 try:
-                    self.buffer.disconnect(sid)
+                    tab.buffer.disconnect(tab.sid_changed)
                 except Exception:
                     pass
-        self._sid_changed = None
-        self._sid_mark = None
+            if tab.sid_mark:
+                try:
+                    tab.buffer.disconnect(tab.sid_mark)
+                except Exception:
+                    pass
+
+        # Disconnect all tracked window signals
+        for widget, sid in self._signal_ids:
+            try:
+                widget.disconnect(sid)
+            except Exception:
+                pass
+        self._signal_ids.clear()
 
         self.top_stack.set_visible_child_name("empty")
         # collapse after any residual transition callback
@@ -619,6 +1130,6 @@ class MicroPadWindow(Adw.ApplicationWindow):  # type: ignore
 
         app = self.get_application()
         if app is not None:
-            GLib.idle_add(app.quit)
+            GLib.idle_add(lambda: (app.quit(), False)[1])
 
         return False

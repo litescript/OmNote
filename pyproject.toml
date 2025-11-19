@@ -4,12 +4,12 @@ build-backend = "hatchling.build"
 
 [project]
 name = "omnote"
-version = "0.1.0"
-description = "MicroPad — tiny plain-text notepad for Omarchy (GTK4 + libadwaita)"
+version = "1.0.0"
+description = "OmNote — tiny plain-text notepad for Omarchy (GTK4 + libadwaita)"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
-authors = [{ name = "Peter + Atlas" }]
+authors = [{ name = "Peter" }]
 
 dependencies = []  # GTK/libadwaita/PyGObject are system packages on Arch
 
@@ -21,28 +21,35 @@ omnote = "omnote.__main__:main"
 micropad = "omnote.__main__:main"  # compat
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/omnote", "src/micropad"]
+packages = ["src/omnote"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-select = ["E", "F", "I", "UP", "B", "PLE", "PLW", "W"]
-ignore = []
 src = ["src"]
 exclude = ["venv", ".venv", "build", "dist"]
 
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "PLE", "PLW", "W"]
+ignore = ["E402", "PLW0603"]  # E402: GTK requires require_version before imports; PLW0603: global statements for singletons
+
 [tool.ruff.lint.isort]
-known-first-party = ["omnote","micropad"]
+known-first-party = ["omnote"]
 
 [tool.mypy]
 python_version = "3.11"
 strict = false
 warn_unused_ignores = true
-ignore_missing_imports = true
+ignore_missing_imports = false  # Tightened: no global ignore
 disallow_untyped_defs = true
 disallow_any_generics = false
 no_implicit_optional = true
 check_untyped_defs = true
+
+# GTK/GObject bindings don't ship type stubs
+[[tool.mypy.overrides]]
+module = ["gi", "gi.repository", "gi.repository.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 addopts = "-q"
