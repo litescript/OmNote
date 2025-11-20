@@ -18,58 +18,65 @@ It integrates seamlessly with the Omarchy desktop environment and provides a cle
 
 ## Installation
 
-OmNote is installed using **pipx**, which isolates the app from system Python while providing a normal `omnote` command.
+OmNote is installed using pipx, which isolates the app from system Python while still providing a normal `omnote` command.
+Because GTK bindings are provided by your OS, OmNote must be installed with access to system site-packages.
 
 ### Quick Install (Recommended)
 
-```bash
-pipx install "git+https://github.com/litescript/OmNote.git"
-```
+pipx install --system-site-packages \
+  "git+https://github.com/litescript/OmNote.git"
 
 After installation:
 
-```bash
 omnote
-```
 
-Or launch **OmNote** from your desktop environment’s application menu.
+Or launch OmNote from your desktop environment’s application menu.
 
-### Requirements
+Requirements:
+- Python 3.11+
+- pipx
+- GTK 4
+- libadwaita
+- PyGObject (GI bindings)
 
-- **Python 3.11+**
-- **pipx**
-- **GTK 4**
-- **libadwaita**
-- **PyGObject (GI bindings)**
+Arch Linux:
 
-#### Arch Linux
+sudo pacman -S --needed \
+  python python-pipx python-gobject \
+  gobject-introspection gtk4 libadwaita
 
-```bash
-sudo pacman -S python python-pipx python-gobject gtk4 libadwaita
-```
+Ubuntu / Debian:
 
-#### Ubuntu / Debian
-
-```bash
-sudo apt install python3 python3-pip pipx python3-gi gir1.2-gtk-4.0 gir1.2-adw-1
-```
+sudo apt install -y \
+  python3 python3-pip pipx \
+  python3-gi gir1.2-gtk-4.0 gir1.2-adw-1
 
 If pipx is missing:
 
-```bash
 python3 -m pip install --user pipx
 pipx ensurepath
-```
 
-### Install from Source (Development)
+Desktop Launcher (Optional):
 
-```bash
+cat > ~/.local/share/applications/omnote.desktop << 'EOF'
+[Desktop Entry]
+Type=Application
+Name=OmNote
+Comment=Lightweight GTK note editor
+Exec=omnote
+Icon=omnote
+Terminal=false
+Categories=Utility;Office;
+StartupNotify=true
+EOF
+
+update-desktop-database ~/.local/share/applications 2>/dev/null || true
+
+Install from Source (Development):
+
 git clone https://github.com/litescript/OmNote.git
 cd OmNote
 ./install.sh
-```
-
-This uses pipx under the hood and installs icons + desktop integration locally.
 
 ## Usage
 
