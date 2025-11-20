@@ -23,12 +23,16 @@ Because GTK bindings are provided by your OS, OmNote must be installed with acce
 
 ### Quick Install (Recommended)
 
+```bash
 pipx install --system-site-packages \
   "git+https://github.com/litescript/OmNote.git"
+```
 
 After installation:
 
+```bash
 omnote
+```
 
 Or launch OmNote from your desktop environment’s application menu.
 
@@ -41,23 +45,30 @@ Requirements:
 
 Arch Linux:
 
+```bash
 sudo pacman -S --needed \
   python python-pipx python-gobject \
   gobject-introspection gtk4 libadwaita
+```
 
 Ubuntu / Debian:
 
+```bash
 sudo apt install -y \
   python3 python3-pip pipx \
   python3-gi gir1.2-gtk-4.0 gir1.2-adw-1
+```
 
 If pipx is missing:
 
+```bash
 python3 -m pip install --user pipx
 pipx ensurepath
+```
 
 Desktop Launcher (Optional):
 
+```bash
 cat > ~/.local/share/applications/omnote.desktop << 'EOF'
 [Desktop Entry]
 Type=Application
@@ -71,12 +82,15 @@ StartupNotify=true
 EOF
 
 update-desktop-database ~/.local/share/applications 2>/dev/null || true
+```
 
 Install from Source (Development):
 
+```bash
 git clone https://github.com/litescript/OmNote.git
 cd OmNote
 ./install.sh
+```
 
 ## Usage
 
