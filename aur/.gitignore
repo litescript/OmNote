@@ -1,0 +1,7 @@
+# makepkg build artifacts
+src/
+pkg/
+*.pkg.tar.zst
+*.pkg.tar.xz
+*.pkg.tar.gz
+omnote-git/

@@ -1,7 +1,8 @@
 # OmNote
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/litescript/OmNote/blob/main/LICENSE.md)  
-[![Python Version](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)  
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/litescript/OmNote/blob/main/LICENSE.md)
+[![Python Version](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
+[![AUR](https://img.shields.io/aur/version/omnote-git)](https://aur.archlinux.org/packages/omnote-git)
 [![GitHub stars](https://img.shields.io/github/stars/litescript/OmNote?style=social)](https://github.com/litescript/OmNote/stargazers)
 
 OmNote is a lightweight, theme-aware plain-text editor built with GTK4 and libadwaita.  
@@ -30,10 +31,18 @@ It integrates seamlessly with the Omarchy desktop environment and provides a cle
 
 ## Installation
 
-OmNote is installed using pipx, which isolates the app from system Python while still providing a normal `omnote` command.
-Because GTK bindings are provided by your OS, OmNote must be installed with access to system site-packages.
+### Arch Linux (AUR)
 
-### Quick Install (Recommended)
+```bash
+yay -S omnote-git
+```
+
+Or with paru, pikaur, etc. This is the easiest method for Arch users.
+
+### pipx (Other distros)
+
+OmNote can be installed using pipx, which isolates the app from system Python while still providing a normal `omnote` command.
+Because GTK bindings are provided by your OS, OmNote must be installed with access to system site-packages.
 
 ```bash
 pipx install --system-site-packages \
@@ -193,7 +202,13 @@ pip install ruff mypy pytest
 
 ## Uninstallation
 
-### pipx uninstall (recommended)
+### Arch Linux (AUR)
+
+```bash
+sudo pacman -R omnote-git
+```
+
+### pipx
 
 ```bash
 pipx uninstall omnote
