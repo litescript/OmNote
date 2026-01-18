@@ -61,10 +61,9 @@ jobs:
           python3 -m pip install --user .
 
       - name: Run omnote --help under Xvfb (Ubuntu)
-        env:
-          PATH: $HOME/.local/bin:$PATH
-          DISPLAY: :99
         run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          export DISPLAY=:99
           Xvfb :99 -screen 0 1024x768x24 &
           sleep 2
           omnote --help
@@ -91,7 +90,7 @@ jobs:
                 gtk4 libadwaita \
                 xorg-server-xvfb
 
-              pipx install .
+              pipx install --system-site-packages .
 
               # Ensure pipx-installed apps are on PATH
               export PATH=/root/.local/bin:$PATH
