@@ -24,8 +24,9 @@ It integrates seamlessly with the Omarchy desktop environment and provides a cle
 
 - Automatic theme synchronization with Omarchy (supports live updates)
 - Multi-tab editing with full session persistence
-- Find/Replace interface with smooth animations
-- Efficient state management (cursor position, geometry, unsaved tabs)
+- Find/Replace interface with smooth animations (edit while searching)
+- Configurable indentation (tab width, spaces vs tabs, auto-indent)
+- Efficient state management (cursor position, geometry, preferences, unsaved tabs)
 - Minimal dependency footprint (Python + GTK4/libadwaita)
 - Reliable error handling and robust file I/O
 
@@ -143,9 +144,19 @@ omnote --help
 
 ## Configuration
 
+### Editor Preferences
+
+Click the gear icon in the header bar to configure:
+
+- **Tab Width** — number of spaces per indentation level (1-16, default 4)
+- **Insert Spaces** — use spaces instead of tab characters (default on)
+- **Auto-Indent** — automatically indent new lines (default on)
+
+Settings are saved to `~/.config/omnote/state.json` and apply to all open tabs.
+
 ### Config & Cache
 
-- State: `~/.config/omnote/state.json`
+- State & preferences: `~/.config/omnote/state.json`
 - Debug log: `~/.cache/omnote/debug.log`
 
 ### Theme Resolution Order

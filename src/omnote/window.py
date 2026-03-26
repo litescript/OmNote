@@ -12,7 +12,7 @@ require_version("GtkSource", "5")
 
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk, GtkSource
 
-from .state import State, TabState
+from .state import EditorPrefs, State, TabState
 
 # Debug logging setup
 DEBUG_LOG = Path.home() / ".cache" / "omnote" / "debug.log"
@@ -39,7 +39,7 @@ except Exception:
 
 class DocumentTab:
     """Represents a single document tab with its own view, buffer, and file state."""
-    def __init__(self) -> None:
+    def __init__(self, editor_prefs: EditorPrefs | None = None) -> None:
         self.view = GtkSource.View()
         self.view.set_monospace(True)
         self.view.set_show_line_numbers(False)
@@ -56,6 +56,9 @@ class DocumentTab:
         self.view.set_left_margin(14)
         self.view.set_right_margin(14)
 
+        # Apply editor preferences
+        self.apply_editor_prefs(editor_prefs or EditorPrefs())
+
         self.buffer = self.view.get_buffer()
         self.file: Gio.File | None = None
         self.changed = False
@@ -63,6 +66,13 @@ class DocumentTab:
         # Signal handlers
         self.sid_changed: int | None = None
         self.sid_mark: int | None = None
+
+    def apply_editor_prefs(self, prefs: EditorPrefs) -> None:
+        """Apply editor preferences to this tab's view."""
+        self.view.set_tab_width(prefs.tab_width)
+        self.view.set_indent_width(prefs.tab_width)
+        self.view.set_insert_spaces_instead_of_tabs(prefs.insert_spaces)
+        self.view.set_auto_indent(prefs.auto_indent)
 
 
 class OmNoteWindow(Adw.ApplicationWindow):
@@ -116,9 +126,15 @@ class OmNoteWindow(Adw.ApplicationWindow):
         sid = repl_btn.connect("clicked", lambda *_: self._show_replace())
         self._signal_ids.append((repl_btn, sid))
 
+        prefs_btn = Gtk.Button.new_from_icon_name("emblem-system-symbolic")
+        prefs_btn.set_tooltip_text("Preferences")
+        sid = prefs_btn.connect("clicked", lambda *_: self._show_preferences())
+        self._signal_ids.append((prefs_btn, sid))
+
         self.header.pack_start(new_btn)
         self.header.pack_start(open_btn)
         self.header.pack_start(save_btn)
+        self.header.pack_end(prefs_btn)
         self.header.pack_end(find_btn)
         self.header.pack_end(repl_btn)
 
@@ -301,7 +317,7 @@ class OmNoteWindow(Adw.ApplicationWindow):
                     page = self._create_tab(Path(tab_state.file_path).name, f)
                     doc_tab = self.tabs[page]
                     doc_tab.view.set_show_line_numbers(tab_state.show_line_numbers)
-                    self._open_file_gfile(f, tab_state)
+                    self._open_file_gfile(f, tab_state, target_tab=doc_tab)
                 else:
                     # Tab without file - restore unsaved content
                     page = self._create_tab()
@@ -372,7 +388,7 @@ class OmNoteWindow(Adw.ApplicationWindow):
     def _create_tab(self, title: str = "Untitled", file: Gio.File | None = None) -> Adw.TabPage:
         """Create a new tab with a DocumentTab."""
         assert self.tab_view is not None
-        doc_tab = DocumentTab()
+        doc_tab = DocumentTab(self.state.editor)
         doc_tab.file = file
 
         # Connect buffer signals
@@ -839,7 +855,6 @@ class OmNoteWindow(Adw.ApplicationWindow):
         ):
             return False
         try:
-            self.set_focus(self.find_entry)
             self.find_entry.grab_focus()
             self.find_entry.set_position(-1)
         except Exception:
@@ -854,7 +869,6 @@ class OmNoteWindow(Adw.ApplicationWindow):
         ):
             return False
         try:
-            self.set_focus(self.replace_find_entry)
             self.replace_find_entry.grab_focus()
             self.replace_find_entry.set_position(-1)
         except Exception:
@@ -999,16 +1013,75 @@ class OmNoteWindow(Adw.ApplicationWindow):
         if not find_text:
             return
 
+        # Use offset-based tracking to avoid iterator drift after delete/insert
         start = buf.get_start_iter()
         while True:
             match = self._buffer_search(find_text, start, True)
             if not match:
                 break
             mstart, mend = match
+            offset = mstart.get_offset()
             buf.delete(mstart, mend)
-            ins = buf.get_iter_at_mark(buf.get_insert())
+            ins = buf.get_iter_at_offset(offset)
             buf.insert(ins, repl_text)
-            start = buf.get_iter_at_mark(buf.get_insert())
+            # Resume search right after the replacement to avoid infinite loops
+            start = buf.get_iter_at_offset(offset + len(repl_text))
+
+    # ---------- preferences ----------
+
+    def _show_preferences(self) -> None:
+        """Show preferences dialog for editor settings."""
+        dialog = Adw.PreferencesDialog.new()
+        dialog.set_title("Preferences")
+
+        page = Adw.PreferencesPage.new()
+        page.set_title("Editor")
+        page.set_icon_name("accessories-text-editor-symbolic")
+
+        group = Adw.PreferencesGroup.new()
+        group.set_title("Indentation")
+        page.add(group)
+
+        # Tab width spinner
+        tab_width_row = Adw.SpinRow.new_with_range(1, 16, 1)
+        tab_width_row.set_title("Tab Width")
+        tab_width_row.set_subtitle("Number of spaces per indentation level")
+        tab_width_row.set_value(self.state.editor.tab_width)
+        group.add(tab_width_row)
+
+        # Insert spaces toggle
+        spaces_row = Adw.SwitchRow.new()
+        spaces_row.set_title("Insert Spaces")
+        spaces_row.set_subtitle("Use spaces instead of tab characters")
+        spaces_row.set_active(self.state.editor.insert_spaces)
+        group.add(spaces_row)
+
+        # Auto-indent toggle
+        auto_indent_row = Adw.SwitchRow.new()
+        auto_indent_row.set_title("Auto-Indent")
+        auto_indent_row.set_subtitle("Automatically indent new lines")
+        auto_indent_row.set_active(self.state.editor.auto_indent)
+        group.add(auto_indent_row)
+
+        dialog.add(page)
+
+        def _on_closed(*_args: object) -> None:
+            new_tab_width = int(tab_width_row.get_value())
+            new_insert_spaces = spaces_row.get_active()
+            new_auto_indent = auto_indent_row.get_active()
+
+            self.state.editor.tab_width = new_tab_width
+            self.state.editor.insert_spaces = new_insert_spaces
+            self.state.editor.auto_indent = new_auto_indent
+
+            # Apply to all open tabs
+            for tab in self.tabs.values():
+                tab.apply_editor_prefs(self.state.editor)
+
+            self.state.save()
+
+        dialog.connect("closed", _on_closed)
+        dialog.present(self)
 
     # ---------- teardown ----------
 

@@ -52,10 +52,18 @@ class TabState:
 
 
 @dataclass
+class EditorPrefs:
+    tab_width: int = 4
+    insert_spaces: bool = True
+    auto_indent: bool = True
+
+
+@dataclass
 class State:
     tabs: list[TabState] = field(default_factory=list)
     active_tab_index: int = 0
     geometry: Geometry = field(default_factory=Geometry)
+    editor: EditorPrefs = field(default_factory=EditorPrefs)
 
     @classmethod
     def load(cls) -> State:
@@ -67,6 +75,7 @@ class State:
                 if f.exists():
                     data = json.loads(f.read_text())
                     geom = Geometry(**data.get("geometry", {}))
+                    editor = EditorPrefs(**data.get("editor", {}))
 
                     # Load tabs if present, otherwise migrate from old "path" field
                     tabs = []
@@ -81,7 +90,10 @@ class State:
                     if active_tab_index < 0 or (tabs and active_tab_index >= len(tabs)):
                         active_tab_index = 0
 
-                    return cls(tabs=tabs, active_tab_index=active_tab_index, geometry=geom)
+                    return cls(
+                        tabs=tabs, active_tab_index=active_tab_index,
+                        geometry=geom, editor=editor,
+                    )
             except Exception:
                 # If corrupted, try the next option or return default
                 continue
@@ -108,6 +120,11 @@ class State:
                 "maximized": self.geometry.maximized,
                 "x": self.geometry.x,
                 "y": self.geometry.y,
+            },
+            "editor": {
+                "tab_width": self.editor.tab_width,
+                "insert_spaces": self.editor.insert_spaces,
+                "auto_indent": self.editor.auto_indent,
             },
         }
         STATE_NEW.write_text(json.dumps(data, indent=2))
