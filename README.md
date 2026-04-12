@@ -24,6 +24,7 @@ It integrates seamlessly with the Omarchy desktop environment and provides a cle
 
 - Automatic theme synchronization with Omarchy (supports live updates)
 - Multi-tab editing with full session persistence
+- Markdown preview mode with styled rendering (headers, bold, code, bullets, checkboxes)
 - Find/Replace interface with smooth animations (edit while searching)
 - Configurable indentation (tab width, spaces vs tabs, auto-indent)
 - Efficient state management (cursor position, geometry, preferences, unsaved tabs)
@@ -139,6 +140,7 @@ omnote --help
 | Next/Prev tab       | Ctrl+Tab / Ctrl+Shift+Tab    |
 | Find                | Ctrl+F                       |
 | Find & Replace      | Ctrl+H                       |
+| Markdown preview    | Ctrl+M                       |
 | Toggle line numbers | Ctrl+L                       |
 | Quit                | Ctrl+Q                       |
 
