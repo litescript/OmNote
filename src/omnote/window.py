@@ -12,6 +12,7 @@ require_version("GtkSource", "5")
 
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk, GtkSource
 
+from .markdown_render import render_markdown
 from .state import EditorPrefs, State, TabState
 
 # Debug logging setup
@@ -62,6 +63,32 @@ class DocumentTab:
         self.buffer = self.view.get_buffer()
         self.file: Gio.File | None = None
         self.changed = False
+
+        # Editor scroller (used as stack child)
+        self.editor_scroller = Gtk.ScrolledWindow(hexpand=True, vexpand=True)
+        self.editor_scroller.set_child(self.view)
+
+        # Preview view (read-only, proportional font)
+        self.preview_view = Gtk.TextView()
+        self.preview_view.set_editable(False)
+        self.preview_view.set_cursor_visible(False)
+        self.preview_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        self.preview_view.set_top_margin(16)
+        self.preview_view.set_bottom_margin(16)
+        self.preview_view.set_left_margin(20)
+        self.preview_view.set_right_margin(20)
+
+        self.preview_scroller = Gtk.ScrolledWindow(hexpand=True, vexpand=True)
+        self.preview_scroller.set_child(self.preview_view)
+
+        # Stack for edit ↔ preview
+        self.stack = Gtk.Stack()
+        self.stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+        self.stack.set_transition_duration(150)
+        self.stack.add_named(self.editor_scroller, "edit")
+        self.stack.add_named(self.preview_scroller, "preview")
+        self.stack.set_visible_child_name("edit")
+        self.preview_mode = False
 
         # Signal handlers
         self.sid_changed: int | None = None
@@ -131,10 +158,19 @@ class OmNoteWindow(Adw.ApplicationWindow):
         sid = prefs_btn.connect("clicked", lambda *_: self._show_preferences())
         self._signal_ids.append((prefs_btn, sid))
 
+        self.preview_btn = Gtk.ToggleButton()
+        self.preview_btn.set_icon_name("view-reveal-symbolic")
+        self.preview_btn.set_tooltip_text("Markdown Preview (Ctrl+M)")
+        self._preview_btn_sid = self.preview_btn.connect(
+            "toggled", lambda *_: self._toggle_preview()
+        )
+        self._signal_ids.append((self.preview_btn, self._preview_btn_sid))
+
         self.header.pack_start(new_btn)
         self.header.pack_start(open_btn)
         self.header.pack_start(save_btn)
         self.header.pack_end(prefs_btn)
+        self.header.pack_end(self.preview_btn)
         self.header.pack_end(find_btn)
         self.header.pack_end(repl_btn)
 
@@ -395,12 +431,8 @@ class OmNoteWindow(Adw.ApplicationWindow):
         doc_tab.sid_changed = doc_tab.buffer.connect("changed", self._on_buffer_changed)
         doc_tab.sid_mark = doc_tab.buffer.connect("mark-set", self._on_mark_set)
 
-        # Wrap view in scrolled window
-        scroller = Gtk.ScrolledWindow(hexpand=True, vexpand=True)
-        scroller.set_child(doc_tab.view)
-
-        # Add to tab view
-        page = self.tab_view.append(scroller)
+        # Add stack (editor + preview) to tab view
+        page = self.tab_view.append(doc_tab.stack)
         page.set_title(title)
         self.tabs[page] = doc_tab
 
@@ -441,6 +473,12 @@ class OmNoteWindow(Adw.ApplicationWindow):
             return
         self._update_status()
         self._update_title()
+        # Sync preview button with current tab's state
+        tab = self._get_current_tab()
+        if tab:
+            self.preview_btn.handler_block(self._preview_btn_sid)
+            self.preview_btn.set_active(tab.preview_mode)
+            self.preview_btn.handler_unblock(self._preview_btn_sid)
         view = self._get_current_view()
         if view:
             GLib.idle_add(lambda: (view.grab_focus(), False)[1])
@@ -498,6 +536,7 @@ class OmNoteWindow(Adw.ApplicationWindow):
             "quit": (self._maybe_close, ["<Primary>q"]),
             "close-tab": (self._close_current_tab, ["<Primary>w"]),  # Ctrl+W to close tab
             "toggle-line-numbers": (self._toggle_line_numbers, ["<Primary>l"]),
+            "toggle-preview": (self._toggle_preview_action, ["<Primary>m"]),
             "next-tab": (self._next_tab, ["<Primary>Tab"]),  # Ctrl+Tab
             "prev-tab": (self._prev_tab, ["<Primary><Shift>Tab"]),  # Ctrl+Shift+Tab
         }
@@ -535,6 +574,31 @@ class OmNoteWindow(Adw.ApplicationWindow):
         current = view.get_show_line_numbers()
         view.set_show_line_numbers(not current)
         _log(f"Line numbers toggled: {current} -> {not current}")
+
+    def _toggle_preview_action(self) -> None:
+        """Action wrapper that also updates the toggle button state."""
+        tab = self._get_current_tab()
+        if not tab:
+            return
+        # Flip the button; the toggled signal calls _toggle_preview
+        self.preview_btn.set_active(not tab.preview_mode)
+
+    def _toggle_preview(self) -> None:
+        """Toggle markdown preview for the current tab."""
+        tab = self._get_current_tab()
+        if not tab:
+            return
+        active = self.preview_btn.get_active()
+        tab.preview_mode = active
+        if active:
+            text = tab.buffer.get_text(
+                tab.buffer.get_start_iter(), tab.buffer.get_end_iter(), True
+            )
+            render_markdown(text, tab.preview_view)
+            tab.stack.set_visible_child_name("preview")
+        else:
+            tab.stack.set_visible_child_name("edit")
+            GLib.idle_add(lambda: (tab.view.grab_focus(), False)[1])
 
     def _close_current_tab(self) -> None:
         """Close the currently active tab."""
