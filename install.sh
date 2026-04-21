@@ -60,13 +60,14 @@ install_package() {
     echo "📦 Installing OmNote package with pipx..."
 
     # We assume we're in the OmNote repo root.
-    # This installs OmNote into an isolated environment and exposes 'omnote' on PATH.
-    if pipx list 2>/dev/null | grep -q '^omnote '; then
-        echo "ℹ️  Existing OmNote pipx install detected — reinstalling from local source..."
-        pipx reinstall omnote --force
-    else
-        pipx install .
+    # --system-site-packages is required so the pipx venv can see the
+    # system-installed PyGObject / gi bindings (GTK4, libadwaita, GtkSourceView).
+    if pipx list 2>/dev/null | grep -qE '^[[:space:]]*package omnote '; then
+        echo "ℹ️  Existing OmNote pipx install detected — removing before fresh install..."
+        pipx uninstall omnote
     fi
+
+    pipx install --system-site-packages .
 
     echo "✅ OmNote installed via pipx"
 }
