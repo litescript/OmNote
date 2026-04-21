@@ -5,9 +5,14 @@ set -e
 
 echo "🗑️  Uninstalling OmNote..."
 
-# Remove Python package
-if python3 -m pip show omnote &>/dev/null; then
-    echo "📦 Removing Python package..."
+# Remove Python package (pipx first — that's what install.sh uses;
+# fall back to pip for legacy installs).
+if command -v pipx &>/dev/null && pipx list 2>/dev/null | grep -qE '^[[:space:]]*package omnote '; then
+    echo "📦 Removing pipx package..."
+    pipx uninstall omnote
+    echo "✅ Package removed"
+elif python3 -m pip show omnote &>/dev/null; then
+    echo "📦 Removing pip package (legacy install)..."
     python3 -m pip uninstall -y omnote
     echo "✅ Package removed"
 fi
