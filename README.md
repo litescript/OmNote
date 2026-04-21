@@ -64,6 +64,7 @@ Requirements:
 - pipx
 - GTK 4
 - libadwaita
+- GtkSourceView 5
 - PyGObject (GI bindings)
 
 Arch Linux:
@@ -71,7 +72,7 @@ Arch Linux:
 ```bash
 sudo pacman -S --needed \
   python python-pipx python-gobject \
-  gobject-introspection gtk4 libadwaita
+  gobject-introspection gtk4 libadwaita gtksourceview5
 ```
 
 Ubuntu / Debian:
@@ -79,7 +80,7 @@ Ubuntu / Debian:
 ```bash
 sudo apt install -y \
   python3 python3-pip pipx \
-  python3-gi gir1.2-gtk-4.0 gir1.2-adw-1
+  python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-gtksource-5
 ```
 
 If pipx is missing:

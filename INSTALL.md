@@ -18,17 +18,17 @@ That's it! OmNote will appear in your Omarchy launcher.
 
 **Arch Linux:**
 ```bash
-sudo pacman -S python python-gobject gtk4 libadwaita
+sudo pacman -S python python-gobject gtk4 libadwaita gtksourceview5
 ```
 
 **Ubuntu/Debian:**
 ```bash
-sudo apt install python3 python3-gi gir1.2-gtk-4.0 gir1.2-adw-1
+sudo apt install python3 python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-gtksource-5
 ```
 
 **Fedora:**
 ```bash
-sudo dnf install python3 python3-gobject gtk4 libadwaita
+sudo dnf install python3 python3-gobject gtk4 libadwaita gtksourceview5
 ```
 
 ### Python Version
@@ -178,7 +178,7 @@ omnote
 
 Check system dependencies:
 ```bash
-python3 -c "import gi; gi.require_version('Gtk', '4.0'); from gi.repository import Gtk, Adw"
+python3 -c "import gi; gi.require_version('Gtk', '4.0'); gi.require_version('GtkSource', '5'); from gi.repository import Gtk, Adw, GtkSource"
 ```
 
 ---

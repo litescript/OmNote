@@ -34,14 +34,18 @@ check_deps() {
         missing+=("libadwaita")
     fi
 
+    if ! pkg-config --exists gtksourceview-5 2>/dev/null && ! pacman -Q gtksourceview5 &>/dev/null && ! dpkg -l gir1.2-gtksource-5 &>/dev/null; then
+        missing+=("gtksourceview5")
+    fi
+
     if [ ${#missing[@]} -gt 0 ]; then
         echo "❌ Missing dependencies: ${missing[*]}"
         echo ""
         echo "On Arch Linux:"
-        echo "  sudo pacman -S python python-pipx python-gobject gtk4 libadwaita"
+        echo "  sudo pacman -S python python-pipx python-gobject gtk4 libadwaita gtksourceview5"
         echo ""
         echo "On Ubuntu/Debian:"
-        echo "  sudo apt install python3 python3-pip python3-gi pipx gir1.2-gtk-4.0 gir1.2-adw-1"
+        echo "  sudo apt install python3 python3-pip python3-gi pipx gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-gtksource-5"
         echo ""
         echo "If pipx is not available via your distro, you can install it with:"
         echo "  python3 -m pip install --user pipx"
