@@ -8,9 +8,20 @@ from gi import require_version
 require_version("Gtk", "4.0")
 require_version("Adw", "1")
 require_version("Gdk", "4.0")
-require_version("GtkSource", "5")
 
-from gi.repository import Adw, Gdk, Gio, GLib, Gtk, GtkSource
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk
+
+# GtkSourceView 5 is an optional system package (gtksourceview5 on Arch). It supplies
+# line numbers and indent control; everything else OmNote does works on plain
+# Gtk.TextView. If it is missing we degrade instead of refusing to start.
+try:
+    require_version("GtkSource", "5")
+    from gi.repository import GtkSource
+
+    HAS_SOURCEVIEW = True
+except (ImportError, ValueError):
+    GtkSource = None
+    HAS_SOURCEVIEW = False
 
 from .markdown_render import render_markdown
 from .state import EditorPrefs, State, TabState
@@ -38,18 +49,31 @@ except Exception:
     pass
 
 
+def _new_editor_view() -> Gtk.TextView:
+    """Build the editor widget, preferring GtkSource.View.
+
+    GtkSource.View subclasses Gtk.TextView and uses the same "textview" CSS node, so
+    the palette generated in theme.py applies to either. Only the SourceView-specific
+    features (line numbers, tab width, auto-indent) need guarding at their call sites.
+    """
+    if HAS_SOURCEVIEW:
+        return GtkSource.View()
+    _log("GtkSourceView 5 unavailable - using Gtk.TextView (line numbers disabled)")
+    return Gtk.TextView()
+
+
 class DocumentTab:
     """Represents a single document tab with its own view, buffer, and file state."""
     def __init__(self, editor_prefs: EditorPrefs | None = None) -> None:
-        self.view = GtkSource.View()
+        self.view = _new_editor_view()
         self.view.set_monospace(True)
-        self.view.set_show_line_numbers(False)
         self.view.set_editable(True)
         self.view.set_focusable(True)
 
-        # Disable GtkSourceView's built-in style scheme to use our CSS theme
-        buf = self.view.get_buffer()
-        buf.set_style_scheme(None)
+        if HAS_SOURCEVIEW:
+            self.view.set_show_line_numbers(False)
+            # Disable GtkSourceView's built-in style scheme to use our CSS theme
+            self.view.get_buffer().set_style_scheme(None)
 
         self.view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
         self.view.set_top_margin(12)
@@ -94,8 +118,23 @@ class DocumentTab:
         self.sid_changed: int | None = None
         self.sid_mark: int | None = None
 
+    def set_show_line_numbers(self, show: bool) -> None:
+        """Show or hide the line-number gutter; no-op without GtkSourceView."""
+        if HAS_SOURCEVIEW:
+            self.view.set_show_line_numbers(show)
+
+    def get_show_line_numbers(self) -> bool:
+        """Whether the gutter is visible; always False without GtkSourceView."""
+        return bool(self.view.get_show_line_numbers()) if HAS_SOURCEVIEW else False
+
     def apply_editor_prefs(self, prefs: EditorPrefs) -> None:
-        """Apply editor preferences to this tab's view."""
+        """Apply editor preferences to this tab's view.
+
+        No-op without GtkSourceView: Gtk.TextView exposes no tab-width, indent-width,
+        or auto-indent API, so these preferences simply have no effect there.
+        """
+        if not HAS_SOURCEVIEW:
+            return
         self.view.set_tab_width(prefs.tab_width)
         self.view.set_indent_width(prefs.tab_width)
         self.view.set_insert_spaces_instead_of_tabs(prefs.insert_spaces)
@@ -352,13 +391,13 @@ class OmNoteWindow(Adw.ApplicationWindow):
                     f = Gio.File.new_for_path(tab_state.file_path)
                     page = self._create_tab(Path(tab_state.file_path).name, f)
                     doc_tab = self.tabs[page]
-                    doc_tab.view.set_show_line_numbers(tab_state.show_line_numbers)
+                    doc_tab.set_show_line_numbers(tab_state.show_line_numbers)
                     self._open_file_gfile(f, tab_state, target_tab=doc_tab)
                 else:
                     # Tab without file - restore unsaved content
                     page = self._create_tab()
                     doc_tab = self.tabs[page]
-                    doc_tab.view.set_show_line_numbers(tab_state.show_line_numbers)
+                    doc_tab.set_show_line_numbers(tab_state.show_line_numbers)
 
                     # Restore buffer content if available
                     if tab_state.unsaved_content:
@@ -411,7 +450,7 @@ class OmNoteWindow(Adw.ApplicationWindow):
         page = self.tab_view.get_selected_page()
         return self.tabs.get(page) if page else None
 
-    def _get_current_view(self) -> GtkSource.View | None:
+    def _get_current_view(self) -> Gtk.TextView | None:
         """Get the view for the current tab."""
         tab = self._get_current_tab()
         return tab.view if tab else None
@@ -567,12 +606,15 @@ class OmNoteWindow(Adw.ApplicationWindow):
         self.add_controller(ctrl)
 
     def _toggle_line_numbers(self) -> None:
-        """Toggle line numbers on/off in the GtkSourceView."""
-        view = self._get_current_view()
-        if not view:
+        """Toggle line numbers on/off in the editor view."""
+        tab = self._get_current_tab()
+        if not tab:
             return
-        current = view.get_show_line_numbers()
-        view.set_show_line_numbers(not current)
+        if not HAS_SOURCEVIEW:
+            _log("Line numbers unavailable: GtkSourceView 5 not installed")
+            return
+        current = tab.get_show_line_numbers()
+        tab.set_show_line_numbers(not current)
         _log(f"Line numbers toggled: {current} -> {not current}")
 
     def _toggle_preview_action(self) -> None:
@@ -1174,7 +1216,7 @@ class OmNoteWindow(Adw.ApplicationWindow):
                 _log(f"Tab {i}: Error getting cursor position: {e}")
 
             file_path = tab.file.get_path() if tab.file else None
-            show_lines = tab.view.get_show_line_numbers() if tab.view else False
+            show_lines = tab.get_show_line_numbers()
 
             # Save buffer content if there's no file (unsaved tab)
             unsaved_content = None
