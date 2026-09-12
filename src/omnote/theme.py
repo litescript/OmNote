@@ -35,6 +35,12 @@ OMARCHY_MARKERS  = [
     OMARCHY_DIR / "theme",
     OMARCHY_DIR / "selected-theme",
 ]
+# Current Omarchy releases point the *active* theme via the XDG state dir
+# (see omarchy-theme-set/omarchy-theme-current), not ~/.config/omarchy.
+# Check this location first; the ~/.config/omarchy paths above are kept
+# as a fallback for older layouts.
+OMARCHY_STATE_DIR      = Path("~/.local/state/omarchy").expanduser()
+OMARCHY_STATE_CURTHEME = OMARCHY_STATE_DIR / "current" / "theme"
 HYPR_USER_CONF   = Path("~/.config/hypr/hyprland.conf").expanduser()
 
 # -------------------- utils --------------------
@@ -215,6 +221,11 @@ def _css_from_palette(pal: dict[str, str | None], *, dark: bool) -> str:
 
 # -------------------- detect active Omarchy theme dir --------------------
 def _omarchy_current_dir() -> Path | None:
+    # Modern Omarchy (omarchy-theme-set/omarchy-theme-current) tracks the
+    # active theme under the XDG state dir. Check that first.
+    if OMARCHY_STATE_CURTHEME.exists():
+        return OMARCHY_STATE_CURTHEME
+
     if OMARCHY_CURTHEME.exists():
         return OMARCHY_CURTHEME
 
@@ -261,8 +272,21 @@ IMPORT_LINE_RE = re.compile(r'(?mi)^\s*(imports?|import)\s*:\s*(?P<val>.+)$')
 QUOTED_PATH_RE = re.compile(r'"([^"]+)"|\'([^\']+)\'')
 DASHED_ITEM_RE = re.compile(r'(?mi)^\s*-\s*(?:"([^"]+)"|\'([^\']+)\')\s*$')
 
-def _parse_alacritty(path: Path) -> dict[str, str | None] | None:
-    if not path.exists():
+def _toml_imports(data: dict) -> list[str]:
+    """Alacritty's TOML config declares imports as general.import = [...]."""
+    imports = (data.get("general") or {}).get("import")
+    if imports is None:
+        imports = data.get("import")
+    if imports is None:
+        return []
+    if isinstance(imports, str):
+        return [imports]
+    if isinstance(imports, list):
+        return [p for p in imports if isinstance(p, str)]
+    return []
+
+def _parse_alacritty(path: Path, _depth: int = 0) -> dict[str, str | None] | None:
+    if _depth > 8 or not path.exists():
         return None
     text = _read(path)
     data = None
@@ -291,6 +315,20 @@ def _parse_alacritty(path: Path) -> dict[str, str | None] | None:
     bg = primary.get("background")
     fg = primary.get("foreground")
 
+    if bg is None and fg is None:
+        # No [colors] table here (common when a theme is pulled in via
+        # `general.import = [...]`) -- follow the import instead of
+        # fabricating a placeholder palette.
+        for raw in _toml_imports(data):
+            for path_str in glob.glob(os.path.expanduser(raw)):
+                p = Path(path_str)
+                if not p.is_absolute():
+                    p = (path.parent / p).resolve()
+                pal = _parse_alacritty(p, _depth + 1)
+                if pal and (pal.get("bg") or pal.get("fg")):
+                    return pal
+        return None
+
     sel_bg = select.get("background")
     sel_fg = select.get("text") or select.get("foreground")
 
@@ -302,8 +340,8 @@ def _parse_alacritty(path: Path) -> dict[str, str | None] | None:
     caret = bright.get("white") or normal.get("white") or fg or "#e0e0e0"
 
     return {
-        "bg": _norm_hex(bg) or "#1e1e1e",
-        "fg": _norm_hex(fg) or "#e0e0e0",
+        "bg": _norm_hex(bg),
+        "fg": _norm_hex(fg),
         "sel_bg": _norm_hex(sel_bg) or sel_bg,
         "sel_fg": _norm_hex(sel_fg) or sel_fg,
         "caret": _norm_hex(caret) or caret,
@@ -447,6 +485,7 @@ def _from_alacritty_config() -> dict[str, str | None]:
         cands.append(Path(envp).expanduser())
 
     cands += [
+        OMARCHY_STATE_CURTHEME / "alacritty.toml",
         OMARCHY_CURTHEME / "alacritty.toml",
         OMARCHY_CURTHEME / "alacritty.yml",
         OMARCHY_CURTHEME / "alacritty.yaml",
@@ -610,6 +649,11 @@ class ThemeWatcher:
     # ---- internals ----
     def _watch_paths(self) -> list[Path]:
         cands = [
+            OMARCHY_STATE_CURTHEME,
+            Path("~/.local/state/omarchy/current").expanduser(),
+            OMARCHY_STATE_CURTHEME / "alacritty.toml",
+            OMARCHY_STATE_CURTHEME / "kitty.conf",
+            OMARCHY_STATE_CURTHEME / "foot.ini",
             OMARCHY_DIR,
             OMARCHY_THEMES,
             # Watch parent dir to detect symlink changes
