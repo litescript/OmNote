@@ -14,7 +14,7 @@ def main() -> int:
         "--system-theme", action="store_true", help="Use system theme (ignore custom CSS)"
     )
     parser.add_argument("--no-watch", action="store_true", help="Disable file/theme watching")
-    args = parser.parse_args()
+    args, remaining = parser.parse_known_args()
 
     if args.system_theme:
         os.environ["OMNOTE_THEME_MODE"] = "system"
@@ -23,6 +23,9 @@ def main() -> int:
         os.environ["OMNOTE_NO_WATCH"] = "1"
         os.environ["MICROPAD_NO_WATCH"] = "1"  # legacy compat
 
+    # Only the leftover args (e.g. a filename) should reach GTK's own argv
+    # parser in app.run(); our custom flags must not leak through to it.
+    sys.argv = [sys.argv[0]] + remaining
     return app_main()
 
 if __name__ == "__main__":
