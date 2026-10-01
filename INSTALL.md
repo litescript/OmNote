@@ -126,12 +126,12 @@ OmNote stores its configuration in:
 ### Theme Integration
 
 OmNote automatically syncs with Omarchy themes. Priority order:
-1. Omarchy theme (`~/.config/omarchy/current/theme/`)
-2. Alacritty config (`~/.config/alacritty/`)
-3. Kitty config
-4. Foot config
-5. Environment variables (`OMNOTE_BG`, `OMNOTE_FG`, etc.)
-6. System GTK4 theme
+1. Omarchy theme: `~/.local/state/omarchy/current/theme/` (Omarchy 4+), or
+   `~/.config/omarchy/current/theme/` on older releases. Colors come from the theme's
+   `alacritty.toml`, `kitty.conf`, or `foot.ini`.
+2. Alacritty config (`~/.config/alacritty/alacritty.toml`, following `general.import`)
+3. `OMNOTE_*` environment variables (`OMNOTE_BG`, `OMNOTE_FG`, etc.)
+4. System GTK4 theme, including `~/.config/gtk-4.0/gtk.css` (fallback)
 
 To force system theme:
 ```bash
@@ -169,9 +169,8 @@ sudo apt install python3-gi
 
 Enable debug mode:
 ```bash
-export OMNOTE_DEBUG=1
-omnote
-# Check ~/.cache/omnote/debug.log
+OMNOTE_DEBUG=1 omnote
+# Theme detection messages ([OmNote:theme] ...) print to the terminal
 ```
 
 ### App won't launch

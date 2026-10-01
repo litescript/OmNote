@@ -165,12 +165,12 @@ Settings are saved to `~/.config/omnote/state.json` and apply to all open tabs.
 
 ### Theme Resolution Order
 
-1. Omarchy theme (`~/.config/omarchy/current/theme/`)
-2. Alacritty configuration
-3. Kitty configuration
-4. Foot configuration
-5. `OMNOTE_*` environment variables
-6. System GTK4 theme (fallback)
+1. Omarchy theme: `~/.local/state/omarchy/current/theme/` (Omarchy 4+), or
+   `~/.config/omarchy/current/theme/` on older releases. Colors come from the theme's
+   `alacritty.toml`, `kitty.conf`, or `foot.ini`.
+2. Alacritty config (`~/.config/alacritty/alacritty.toml`, following `general.import`)
+3. `OMNOTE_*` environment variables (`OMNOTE_BG`, `OMNOTE_FG`, etc.)
+4. System GTK4 theme, including `~/.config/gtk-4.0/gtk.css` (fallback)
 
 ### Examples
 

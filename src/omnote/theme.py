@@ -272,80 +272,99 @@ IMPORT_LINE_RE = re.compile(r'(?mi)^\s*(imports?|import)\s*:\s*(?P<val>.+)$')
 QUOTED_PATH_RE = re.compile(r'"([^"]+)"|\'([^\']+)\'')
 DASHED_ITEM_RE = re.compile(r'(?mi)^\s*-\s*(?:"([^"]+)"|\'([^\']+)\')\s*$')
 
-def _toml_imports(data: dict) -> list[str]:
-    """Alacritty's TOML config declares imports as general.import = [...]."""
-    imports = (data.get("general") or {}).get("import")
+def _table(data: dict, key: str) -> dict:
+    """data[key] if it is a table, else {} (configs are user-written; don't trust shapes)."""
+    v = data.get(key)
+    return v if isinstance(v, dict) else {}
+
+def _alacritty_imports(data: dict) -> list[str]:
+    """Alacritty declares imports as general.import = [...] (TOML) or import: [...] (old)."""
+    imports = _table(data, "general").get("import")
     if imports is None:
         imports = data.get("import")
-    if imports is None:
-        return []
     if isinstance(imports, str):
         return [imports]
     if isinstance(imports, list):
         return [p for p in imports if isinstance(p, str)]
     return []
 
-def _parse_alacritty(path: Path, _depth: int = 0) -> dict[str, str | None] | None:
-    if _depth > 8 or not path.exists():
+def _deep_merge(dst: dict, src: dict) -> dict:
+    for k, v in src.items():
+        if isinstance(v, dict):
+            dst[k] = _deep_merge(dst[k] if isinstance(dst.get(k), dict) else {}, v)
+        else:
+            dst[k] = v
+    return dst
+
+def _load_alacritty(path: Path, visited: set[Path] | None = None) -> dict | None:
+    """Parse an Alacritty config with its imports folded in the way Alacritty does it:
+    imports load first, in order, and the importing file's own keys win."""
+    visited = set() if visited is None else visited
+    try:
+        path = path.resolve()
+    except Exception:
+        pass
+    if path in visited or len(visited) > 8 or not path.exists():
         return None
+    visited.add(path)
+
     text = _read(path)
     data = None
-
     if path.suffix.lower() == ".toml" and tomllib is not None:
         try:
             data = tomllib.loads(text)
         except Exception as e:
             _dbg(f"TOML parse failed for {path}: {e}")
-
     if data is None and yaml is not None and path.suffix.lower() in {".yml", ".yaml"}:
         try:
             data = yaml.safe_load(text)
         except Exception as e:
             _dbg(f"YAML parse failed for {path}: {e}")
-
     if not isinstance(data, dict):
         return None
 
-    colors   = data.get("colors") or {}
-    primary  = colors.get("primary") or {}
-    normal   = colors.get("normal") or {}
-    bright   = colors.get("bright") or {}
-    select   = colors.get("selection") or {}
+    merged: dict = {}
+    for raw in _alacritty_imports(data):
+        p = Path(raw).expanduser()
+        if not p.is_absolute():
+            p = path.parent / p  # relative to the importing file, not our cwd
+        sub = _load_alacritty(p, visited)
+        if sub:
+            _deep_merge(merged, sub)
+    return _deep_merge(merged, data)
 
-    bg = primary.get("background")
-    fg = primary.get("foreground")
-
-    if bg is None and fg is None:
-        # No [colors] table here (common when a theme is pulled in via
-        # `general.import = [...]`) -- follow the import instead of
-        # fabricating a placeholder palette.
-        for raw in _toml_imports(data):
-            for path_str in glob.glob(os.path.expanduser(raw)):
-                p = Path(path_str)
-                if not p.is_absolute():
-                    p = (path.parent / p).resolve()
-                pal = _parse_alacritty(p, _depth + 1)
-                if pal and (pal.get("bg") or pal.get("fg")):
-                    return pal
+def _parse_alacritty(path: Path) -> dict[str, str | None] | None:
+    data = _load_alacritty(path)
+    if data is None:
         return None
 
-    sel_bg = select.get("background")
-    sel_fg = select.get("text") or select.get("foreground")
+    colors  = _table(data, "colors")
+    primary = _table(colors, "primary")
+    cursor  = _table(colors, "cursor")
+    normal  = _table(colors, "normal")
+    bright  = _table(colors, "bright")
+    select  = _table(colors, "selection")
 
-    if not sel_bg:
-        sel_bg = _mix_color(bg or "#1e1e1e", fg or "#e0e0e0", 0.15)
-    if not sel_fg:
-        sel_fg = fg or "#e0e0e0"
+    bg = _norm_hex(primary.get("background"))
+    fg = _norm_hex(primary.get("foreground"))
+    if not bg and not fg:
+        # Nothing here or in its imports: report "not found" rather than inventing
+        # a palette, so later sources (and the system theme) still get a chance.
+        return None
 
-    caret = bright.get("white") or normal.get("white") or fg or "#e0e0e0"
+    # Only hex survives _norm_hex, so values like "CellForeground" never reach the CSS
+    sel_bg = _norm_hex(select.get("background"))
+    if not sel_bg and bg and fg:
+        sel_bg = _mix_color(bg, fg, 0.15)
+    sel_fg = _norm_hex(select.get("text")) or _norm_hex(select.get("foreground")) or fg
+    caret  = (
+        _norm_hex(cursor.get("cursor"))
+        or _norm_hex(bright.get("white"))
+        or _norm_hex(normal.get("white"))
+        or fg
+    )
 
-    return {
-        "bg": _norm_hex(bg),
-        "fg": _norm_hex(fg),
-        "sel_bg": _norm_hex(sel_bg) or sel_bg,
-        "sel_fg": _norm_hex(sel_fg) or sel_fg,
-        "caret": _norm_hex(caret) or caret,
-    }
+    return {"bg": bg, "fg": fg, "sel_bg": sel_bg, "sel_fg": sel_fg, "caret": caret}
 
 def _collect_imports_text(
     main_path: Path, visited: set[Path], depth: int = 0, max_depth: int = 8
@@ -578,15 +597,11 @@ def apply_best_theme() -> None:
         _from_gtk_defaults(),
     )
 
-    sm = Adw.StyleManager.get_default()
-    is_dark = bool(getattr(sm, "get_dark", lambda: False)())
-
-    css_text: str | None = (
-        _css_from_palette(merged, dark=is_dark) if isinstance(merged, dict) else None
-    )
-    if css_text:
+    if merged["bg"] or merged["fg"]:
+        sm = Adw.StyleManager.get_default()
+        is_dark = bool(getattr(sm, "get_dark", lambda: False)())
         _dbg("Using palette → CSS.")
-        _apply_css(css=css_text)
+        _apply_css(css=_css_from_palette(merged, dark=is_dark))
         return
 
     user_gtk_css = Path.home() / ".config" / "gtk-4.0" / "gtk.css"
