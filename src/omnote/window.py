@@ -467,7 +467,9 @@ class OmNoteWindow(Adw.ApplicationWindow):
         doc_tab.file = file
 
         # Connect buffer signals
-        doc_tab.sid_changed = doc_tab.buffer.connect("changed", self._on_buffer_changed)
+        doc_tab.sid_changed = doc_tab.buffer.connect(
+            "changed", self._on_buffer_changed, doc_tab
+        )
         doc_tab.sid_mark = doc_tab.buffer.connect("mark-set", self._on_mark_set)
 
         # Add stack (editor + preview) to tab view
@@ -883,12 +885,12 @@ class OmNoteWindow(Adw.ApplicationWindow):
         if buf:
             buf.set_text(text)
 
-    def _on_buffer_changed(self, *_args) -> None:
+    def _on_buffer_changed(self, _buffer: Gtk.TextBuffer, tab: DocumentTab) -> None:
         if self._closing:
             return
-        tab = self._get_current_tab()
-        if tab:
-            tab.changed = True
+        # The tab that owns this buffer, not the selected one: a background tab
+        # finishing its async load must not mark the focused tab as modified.
+        tab.changed = True
         self._update_title()
         self._queue_status(30)
 
