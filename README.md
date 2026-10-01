@@ -125,7 +125,8 @@ cd OmNote
 
 ```bash
 omnote
-omnote file.txt
+omnote file.txt          # opens in a new tab (created on save if it doesn't exist)
+omnote a.txt b.md        # one tab per file
 omnote --help
 ```
 

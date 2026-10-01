@@ -690,6 +690,35 @@ class OmNoteWindow(Adw.ApplicationWindow):
             self.tab_view.set_selected_page(page)
             self._open_file_gfile(f)
 
+    def open_files(self, files: list[Gio.File]) -> None:
+        """Open files from the command line or "Open with", one tab each.
+
+        An already-open file is focused rather than duplicated, a blank Untitled tab
+        (like the one a fresh window starts with) is reused, and a file that doesn't
+        exist yet opens empty so Save creates it.
+        """
+        assert self.tab_view is not None
+        for f in files:
+            page = next(
+                (p for p, t in self.tabs.items() if t.file is not None and t.file.equal(f)), None
+            )
+            if page is None:
+                page = self.tab_view.get_selected_page()
+                tab = self.tabs.get(page) if page else None
+                if (
+                    page and tab and tab.file is None and not tab.changed
+                    and tab.buffer.get_char_count() == 0
+                ):
+                    tab.file = f
+                    page.set_title(f.get_basename() or "Untitled")
+                else:
+                    page = self._create_tab(f.get_basename() or "Untitled", f)
+                    tab = self.tabs[page]
+                if f.query_exists(None):
+                    self._open_file_gfile(f, target_tab=tab)
+            self.tab_view.set_selected_page(page)
+        self._update_title()
+
     def _open_file_gfile(
         self, f: Gio.File, tab_state: TabState | None = None, target_tab: DocumentTab | None = None
     ) -> None:

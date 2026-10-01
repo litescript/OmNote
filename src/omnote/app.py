@@ -51,9 +51,8 @@ class OmNote(Adw.Application):
         # Handle files passed via command line or "Open with..."
         self.do_activate()  # Ensure window exists
         win = self.props.active_window
-        if win and files:
-            # Open the first file (single-document editor)
-            win._open_file_gfile(files[0])
+        if isinstance(win, OmNoteWindow) and files:
+            win.open_files(files)
 
     def do_shutdown(self) -> None:
         # Cleanly stop theme watcher so no monitors/timeouts hold the loop
@@ -70,7 +69,7 @@ class OmNote(Adw.Application):
             app.quit()
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     Adw.init()
     app = OmNote()
-    return app.run(sys.argv)
+    return app.run(sys.argv if argv is None else argv)
