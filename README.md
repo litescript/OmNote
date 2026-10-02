@@ -22,7 +22,7 @@ It integrates seamlessly with the Omarchy desktop environment and provides a cle
 
 ## Features
 
-- Automatic theme synchronization with Omarchy (supports live updates)
+- Automatic theme sync with Omarchy, Alacritty, or Kitty (supports live updates)
 - Multi-tab editing with full session persistence
 - Markdown preview mode with styled rendering (headers, bold, code, bullets, checkboxes)
 - Find/Replace interface with smooth animations (edit while searching)
@@ -169,8 +169,9 @@ Settings are saved to `~/.config/omnote/state.json` and apply to all open tabs.
    `~/.config/omarchy/current/theme/` on older releases. Colors come from the theme's
    `alacritty.toml`, `kitty.conf`, or `foot.ini`.
 2. Alacritty config (`~/.config/alacritty/alacritty.toml`, following `general.import`)
-3. `OMNOTE_*` environment variables (`OMNOTE_BG`, `OMNOTE_FG`, etc.)
-4. System GTK4 theme, including `~/.config/gtk-4.0/gtk.css` (fallback)
+3. Kitty config (`~/.config/kitty/kitty.conf`, following `include`)
+4. `OMNOTE_*` environment variables (`OMNOTE_BG`, `OMNOTE_FG`, etc.)
+5. System GTK4 theme, including `~/.config/gtk-4.0/gtk.css` (fallback)
 
 ### Examples
 

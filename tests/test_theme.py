@@ -37,7 +37,8 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.delenv("ALACRITTY_CONFIG", raising=False)
+    for var in ("ALACRITTY_CONFIG", "KITTY_CONFIG_DIRECTORY", "XDG_CONFIG_HOME"):
+        monkeypatch.delenv(var, raising=False)
     for prefix in ("OMNOTE_", "MICROPAD_"):
         for key in ("THEME_MODE", "BG", "FG", "SEL_BG", "SEL_FG", "CARET"):
             monkeypatch.delenv(prefix + key, raising=False)
@@ -142,6 +143,68 @@ class TestAlacritty:
         assert pal["sel_bg"] is not None and pal["sel_bg"].startswith("#")
 
 
+KITTY_THEME = """
+cursor                #f8d9d7
+background            #240f0f
+foreground            #f8d9d7
+selection_foreground  #f8d9d7
+selection_background  #59302e
+"""
+
+KITTY_PALETTE = {
+    "bg": "#240f0f",
+    "fg": "#f8d9d7",
+    "sel_bg": "#59302e",
+    "sel_fg": "#f8d9d7",
+    "caret": "#f8d9d7",
+}
+
+
+class TestKitty:
+    def test_symlinked_config_with_relative_include(self, home: Path, theme) -> None:
+        """kitty.conf symlinked from a dotfile repo, theme included from beside the link."""
+        real = write(home / "dotfiles/kitty/kitty.conf", "font_size 11\ninclude themes/t.conf\n")
+        write(home / ".config/kitty/themes/t.conf", KITTY_THEME)
+        (home / ".config/kitty/kitty.conf").symlink_to(real)
+        assert theme._from_kitty_config() == KITTY_PALETTE
+
+    def test_last_assignment_wins(self, home: Path, theme) -> None:
+        write(home / ".config/kitty/t.conf", "background #111111\nforeground #eeeeee\n")
+        write(
+            home / ".config/kitty/kitty.conf",
+            "background #000000\ninclude t.conf\nforeground #222222\n",
+        )
+        pal = theme._from_kitty_config()
+        assert pal["bg"] == "#111111"
+        assert pal["fg"] == "#222222"
+
+    def test_globinclude_and_options_with_shared_prefixes(self, home: Path, theme) -> None:
+        write(home / ".config/kitty/colors/a.conf", "background #101010\n")
+        write(home / ".config/kitty/colors/b.conf", "foreground #f0f0f0\n")
+        write(
+            home / ".config/kitty/kitty.conf",
+            "globinclude colors/*.conf\nbackground_opacity 0.9\ncursor_shape beam\n",
+        )
+        pal = theme._from_kitty_config()
+        assert (pal["bg"], pal["fg"], pal["caret"]) == ("#101010", "#f0f0f0", None)
+
+    def test_honors_kitty_config_directory(
+        self, home: Path, theme, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        write(home / "elsewhere/kitty.conf", KITTY_THEME)
+        monkeypatch.setenv("KITTY_CONFIG_DIRECTORY", str(home / "elsewhere"))
+        assert theme._from_kitty_config() == KITTY_PALETTE
+
+    def test_include_cycle_terminates(self, home: Path, theme) -> None:
+        write(home / ".config/kitty/kitty.conf", "include other.conf\n")
+        write(home / ".config/kitty/other.conf", "include kitty.conf\n")
+        assert not any(theme._from_kitty_config().values())
+
+    def test_no_colors_reports_not_found(self, home: Path, theme) -> None:
+        write(home / ".config/kitty/kitty.conf", "font_size 11\n")
+        assert not any(theme._from_kitty_config().values())
+
+
 class TestApplyBestTheme:
     @pytest.fixture
     def applied(self, theme, monkeypatch: pytest.MonkeyPatch) -> list:
@@ -156,6 +219,17 @@ class TestApplyBestTheme:
         theme.apply_best_theme()
         css, path = applied[-1]
         assert "@define-color term_bg #1a1b26;" in css
+
+    def test_kitty_palette_is_used(self, home: Path, theme, applied: list) -> None:
+        write(home / ".config/kitty/kitty.conf", KITTY_THEME)
+        theme.apply_best_theme()
+        assert "@define-color term_bg #240f0f;" in applied[-1][0]
+
+    def test_alacritty_wins_over_kitty(self, home: Path, theme, applied: list) -> None:
+        write(home / ".config/kitty/kitty.conf", KITTY_THEME)
+        write(home / ".config/alacritty/alacritty.toml", TOKYO_NIGHT)
+        theme.apply_best_theme()
+        assert "@define-color term_bg #1a1b26;" in applied[-1][0]
 
     def test_nothing_detected_inherits_system_theme(self, theme, applied: list) -> None:
         """No more flat-gray override when no palette exists anywhere."""

@@ -434,11 +434,46 @@ def _palette_from_alacritty_text(txt: str) -> dict[str, str | None]:
     return out
 
 # -------------------- kitty / foot parsers --------------------
+KITTY_INCLUDE_RE = re.compile(r"^\s*(include|globinclude)\s+(?P<p>.+?)\s*$")
+
+def _kitty_config_path() -> Path:
+    d = os.getenv("KITTY_CONFIG_DIRECTORY")
+    if d:
+        return Path(d).expanduser() / "kitty.conf"
+    return Path(os.getenv("XDG_CONFIG_HOME") or "~/.config").expanduser() / "kitty" / "kitty.conf"
+
+def _kitty_text(path: Path, visited: set[Path] | None = None) -> str:
+    """A kitty config with its includes expanded in place, so the text reads in the
+    order kitty applies it. Relative includes resolve against the including file as
+    named, like kitty does, so a symlinked kitty.conf finds themes/ next to the link.
+    `visited` collects the real path of every file read."""
+    visited = set() if visited is None else visited
+    try:
+        key = path.resolve()
+    except Exception:
+        key = path
+    if key in visited or len(visited) > 32 or not path.is_file():
+        return ""
+    visited.add(key)
+
+    lines: list[str] = []
+    for line in _read(path).splitlines():
+        m = KITTY_INCLUDE_RE.match(line)
+        if not m:
+            lines.append(line)
+            continue
+        raw = os.path.expandvars(os.path.expanduser(m.group("p")))
+        target = raw if os.path.isabs(raw) else str(path.parent / raw)
+        for t in sorted(glob.glob(target)) if m.group(1) == "globinclude" else [target]:
+            lines.append(_kitty_text(Path(t), visited))
+    return "\n".join(lines)
+
 def _palette_from_kitty_text(txt: str) -> dict[str, str | None]:
     out = _empty_palette()
     def grab(k: str) -> str | None:
-        m = re.search(rf"(?mi)^\s*{k}\s+({HEX_RE})", txt)
-        return _norm_hex(m.group(1)) if m else None
+        # kitty applies lines in order, so the last assignment wins (even a non-hex one)
+        found = re.findall(rf"(?mi)^\s*{k}\s+(\S+)", txt)
+        return _norm_hex(found[-1]) if found else None
     out["bg"]    = grab("background")
     out["fg"]    = grab("foreground")
     out["caret"] = grab("cursor")
@@ -469,7 +504,7 @@ def _palette_from_theme_dir(theme_dir: Path) -> dict[str, str | None]:
             return _palette_from_alacritty_text(_read(f))
     f = theme_dir / "kitty.conf"
     if f.exists():
-        return _palette_from_kitty_text(_read(f))
+        return _palette_from_kitty_text(_kitty_text(f))
     f = theme_dir / "foot.ini"
     if f.exists():
         return _palette_from_foot_text(_read(f))
@@ -535,6 +570,15 @@ def _from_alacritty_config() -> dict[str, str | None]:
     _dbg("Alacritty palette not found.")
     return _empty_palette()
 
+def _from_kitty_config() -> dict[str, str | None]:
+    path = _kitty_config_path()
+    pal = _palette_from_kitty_text(_kitty_text(path))
+    if pal["bg"] or pal["fg"]:
+        _dbg(f"Kitty palette from {path}")
+        return pal
+    _dbg("Kitty palette not found.")
+    return _empty_palette()
+
 def _from_gtk_defaults() -> dict[str, str | None]:
     return _empty_palette()
 
@@ -582,10 +626,11 @@ def apply_best_theme() -> None:
       0) OMNOTE_THEME_MODE=system → inherit system theme
       1) Omarchy active theme (palette)
       2) Alacritty main (palette)
-      3) OMNOTE_* env (palette)
-      4) GTK defaults (no-op)
-      5) Fallback: ~/.config/gtk-4.0/gtk.css
-      6) Else: clear provider (inherit system)
+      3) Kitty main, includes expanded (palette)
+      4) OMNOTE_* env (palette)
+      5) GTK defaults (no-op)
+      6) Fallback: ~/.config/gtk-4.0/gtk.css
+      7) Else: clear provider (inherit system)
     """
     if _getenv("MICROPAD_THEME_MODE", "").lower() == "system":
         _dbg("Theme mode=system → clearing provider (inherit system).")
@@ -595,6 +640,7 @@ def apply_best_theme() -> None:
     merged = _merge_pref(
         _from_omarchy_theme(),
         _from_alacritty_config(),
+        _from_kitty_config(),
         _from_env(),
         _from_gtk_defaults(),
     )
@@ -691,6 +737,11 @@ class ThemeWatcher:
             Path("~/.alacritty.yml").expanduser(),
             Path("~/.config/gtk-4.0/gtk.css").expanduser(),
         ]
+        # kitty: its config dir, plus the real file behind every config/include read,
+        # since editing a symlink's target raises no event in the symlink's directory
+        kitty_files: set[Path] = set()
+        _kitty_text(_kitty_config_path(), kitty_files)
+        cands += [_kitty_config_path().parent, *sorted(kitty_files)]
         return [p for p in cands if p and Path(p).exists()]
 
     def _add_monitor(self, path: Path) -> None:

@@ -130,8 +130,9 @@ OmNote automatically syncs with Omarchy themes. Priority order:
    `~/.config/omarchy/current/theme/` on older releases. Colors come from the theme's
    `alacritty.toml`, `kitty.conf`, or `foot.ini`.
 2. Alacritty config (`~/.config/alacritty/alacritty.toml`, following `general.import`)
-3. `OMNOTE_*` environment variables (`OMNOTE_BG`, `OMNOTE_FG`, etc.)
-4. System GTK4 theme, including `~/.config/gtk-4.0/gtk.css` (fallback)
+3. Kitty config (`~/.config/kitty/kitty.conf`, following `include`)
+4. `OMNOTE_*` environment variables (`OMNOTE_BG`, `OMNOTE_FG`, etc.)
+5. System GTK4 theme, including `~/.config/gtk-4.0/gtk.css` (fallback)
 
 To force system theme:
 ```bash
