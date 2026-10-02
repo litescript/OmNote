@@ -222,6 +222,7 @@ class OmNoteWindow(Adw.ApplicationWindow):
 
         # top bar stack container (hidden when idle; animates when shown)
         self.top_stack = Gtk.Stack()
+        self.top_stack.add_css_class("floating-bar")  # styled by theme.py's palette CSS
         self.top_stack.set_transition_type(Gtk.StackTransitionType.SLIDE_DOWN)
         self.top_stack.set_hexpand(False)  # Don't expand horizontally
         self.top_stack.set_vexpand(False)

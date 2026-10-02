@@ -231,6 +231,12 @@ class TestApplyBestTheme:
         theme.apply_best_theme()
         assert "@define-color term_bg #1a1b26;" in applied[-1][0]
 
+    def test_floating_bar_style_does_not_frame_every_stack(self, theme) -> None:
+        """Each editor sits in a Gtk.Stack (editor/preview); only the find bar gets the frame."""
+        css = theme._css_from_palette(TOKYO_PALETTE, dark=True)
+        assert "stack.floating-bar {" in css
+        assert "\nstack {" not in css
+
     def test_nothing_detected_inherits_system_theme(self, theme, applied: list) -> None:
         """No more flat-gray override when no palette exists anywhere."""
         theme.apply_best_theme()
