@@ -101,6 +101,15 @@ class TestAlacritty:
         monkeypatch.chdir(tmp_path)
         assert theme._parse_alacritty(main) == TOKYO_PALETTE
 
+    def test_symlinked_config_resolves_imports_next_to_the_link(
+        self, home: Path, theme
+    ) -> None:
+        """Dotfile repos symlink alacritty.toml in; its imports live beside the link."""
+        real = write(home / "dotfiles/alacritty.toml", '[general]\nimport = ["themes/t.toml"]\n')
+        write(home / ".config/alacritty/themes/t.toml", TOKYO_NIGHT)
+        (home / ".config/alacritty/alacritty.toml").symlink_to(real)
+        assert theme._from_alacritty_config() == TOKYO_PALETTE
+
     def test_importing_file_overrides_imported_colors(self, home: Path, theme) -> None:
         write(home / ".config/alacritty/tokyo.toml", TOKYO_NIGHT)
         main = write(

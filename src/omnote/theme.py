@@ -301,12 +301,12 @@ def _load_alacritty(path: Path, visited: set[Path] | None = None) -> dict | None
     imports load first, in order, and the importing file's own keys win."""
     visited = set() if visited is None else visited
     try:
-        path = path.resolve()
+        key = path.resolve()
     except Exception:
-        pass
-    if path in visited or len(visited) > 8 or not path.exists():
+        key = path
+    if key in visited or len(visited) > 8 or not path.exists():
         return None
-    visited.add(path)
+    visited.add(key)
 
     text = _read(path)
     data = None
@@ -327,7 +327,9 @@ def _load_alacritty(path: Path, visited: set[Path] | None = None) -> dict | None
     for raw in _alacritty_imports(data):
         p = Path(raw).expanduser()
         if not p.is_absolute():
-            p = path.parent / p  # relative to the importing file, not our cwd
+            # Relative to the importing file as named, not our cwd and not a symlink's
+            # target (dotfile repos often symlink the config in from elsewhere)
+            p = path.parent / p
         sub = _load_alacritty(p, visited)
         if sub:
             _deep_merge(merged, sub)
