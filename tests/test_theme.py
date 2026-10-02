@@ -237,6 +237,13 @@ class TestApplyBestTheme:
         assert "stack.floating-bar {" in css
         assert "\nstack {" not in css
 
+    def test_popover_shadow_margin_stays_transparent(self, theme) -> None:
+        """Popovers have the .background class; only their menu should be painted."""
+        css = theme._css_from_palette(TOKYO_PALETTE, dark=True)
+        selectors = [line.split("{")[0] for line in css.splitlines() if line.endswith("{")]
+        assert not any(".background" in sel for sel in selectors)
+        assert "popover > contents, popover > arrow {" in css
+
     def test_nothing_detected_inherits_system_theme(self, theme, applied: list) -> None:
         """No more flat-gray override when no palette exists anywhere."""
         theme.apply_best_theme()
