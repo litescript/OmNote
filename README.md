@@ -194,7 +194,7 @@ export OMNOTE_NO_WATCH=1
 Square window corners, for compositors that round and clip windows themselves:
 
 ```bash
-export OMNOTE_SQUARE_CORNERS=1   # 0 keeps libadwaita's own rounded corners
+export OMNOTE_SQUARE_CORNERS=1   # 1/true/yes/on: square; 0/false/no/off: libadwaita's own
 ```
 
 This is automatic on umbriel when `prefer_no_csd` is on (its default). Otherwise

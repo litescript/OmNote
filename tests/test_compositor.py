@@ -49,13 +49,27 @@ def test_desktop_list_is_matched_per_entry(
     assert compositor.compositor_rounds_corners()
 
 
-@pytest.mark.parametrize("forced, expected", [("1", True), ("0", False)])
+@pytest.mark.parametrize(
+    "forced, expected",
+    [("1", True), ("true", True), ("YES", True), (" on ", True),
+     ("0", False), ("false", False), ("No", False), ("OFF", False)],
+)
 def test_env_override_wins(
     config_home: Path, monkeypatch: pytest.MonkeyPatch, forced: str, expected: bool
 ) -> None:
     monkeypatch.setenv("XDG_CURRENT_DESKTOP", "Hyprland")
     monkeypatch.setenv("OMNOTE_SQUARE_CORNERS", forced)
     assert compositor.compositor_rounds_corners() is expected
+
+
+@pytest.mark.parametrize("value", ["", "auto", "maybe"])
+def test_unrecognized_override_falls_back_to_detection(
+    config_home: Path, monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv("OMNOTE_SQUARE_CORNERS", value)
+    assert compositor.compositor_rounds_corners()  # umbriel, default config
+    monkeypatch.setenv("XDG_CURRENT_DESKTOP", "Hyprland")
+    assert not compositor.compositor_rounds_corners()
 
 
 def test_unreadable_config_reads_as_absent(

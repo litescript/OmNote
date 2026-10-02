@@ -79,14 +79,24 @@ def umbriel_prefers_no_csd(path: Path | None = None) -> bool:
     return value if isinstance(value, bool) else True
 
 
+def _env_flag(name: str) -> bool | None:
+    """True/False for the usual spellings, None (detect) when unset or anything else."""
+    value = (os.getenv(name) or "").strip().lower()
+    if value in ("1", "true", "yes", "on"):
+        return True
+    if value in ("0", "false", "no", "off"):
+        return False
+    return None
+
+
 def compositor_rounds_corners() -> bool:
     """Whether the compositor rounds and clips our windows itself.
 
-    OMNOTE_SQUARE_CORNERS=1/0 forces the answer (for compositors not detected here).
+    OMNOTE_SQUARE_CORNERS forces the answer (for compositors not detected here).
     """
-    forced = os.getenv("OMNOTE_SQUARE_CORNERS")
-    if forced in ("0", "1"):
-        return forced == "1"
+    forced = _env_flag("OMNOTE_SQUARE_CORNERS")
+    if forced is not None:
+        return forced
     try:
         desktops = (os.getenv("XDG_CURRENT_DESKTOP") or "").lower().split(":")
         if "umbriel" in desktops:
