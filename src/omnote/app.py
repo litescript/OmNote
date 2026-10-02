@@ -9,8 +9,9 @@ require_version("Gtk", "4.0")
 require_version("Adw", "1")
 require_version("Gdk", "4.0")
 
-from gi.repository import Adw, Gio
+from gi.repository import Adw, Gdk, Gio, Gtk
 
+from .compositor import SQUARE_CORNERS_CSS, compositor_rounds_corners
 from .state import State
 from .theme import apply_best_theme, start_theme_watcher, stop_theme_watcher
 from .window import OmNoteWindow
@@ -34,6 +35,14 @@ class OmNote(Adw.Application):
     def do_startup(self) -> None:
         Adw.Application.do_startup(self)
         apply_best_theme()
+        if compositor_rounds_corners():
+            # The compositor rounds and clips our windows; libadwaita's own corners
+            # would sit inside its curve and leave a visible gap (see compositor.py)
+            corners = Gtk.CssProvider()
+            corners.load_from_data(SQUARE_CORNERS_CSS.encode("utf-8"))
+            Gtk.StyleContext.add_provider_for_display(
+                Gdk.Display.get_default(), corners, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+            )
         # Check OMNOTE_NO_WATCH first, fall back to MICROPAD_NO_WATCH (legacy)
         if not (os.getenv("OMNOTE_NO_WATCH") or os.getenv("MICROPAD_NO_WATCH")):
             self._theme_watcher = start_theme_watcher()
