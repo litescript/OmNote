@@ -45,12 +45,16 @@ def _load_umbriel(path: Path, visited: set[Path] | None = None) -> dict:
         key = path.resolve()
     except Exception:
         key = path
-    if tomllib is None or key in visited or len(visited) > 16 or not path.is_file():
+    if tomllib is None or key in visited or len(visited) > 16:
         return {}
     visited.add(key)
     try:
+        # Inside the try: before Python 3.14, is_file() raises PermissionError for a
+        # file in an unreadable directory instead of returning False
+        if not path.is_file():
+            return {}
         data = tomllib.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except Exception:  # unreadable or malformed reads as absent, i.e. umbriel's defaults
         return {}
 
     include = data.get("include")
@@ -83,7 +87,12 @@ def compositor_rounds_corners() -> bool:
     forced = os.getenv("OMNOTE_SQUARE_CORNERS")
     if forced in ("0", "1"):
         return forced == "1"
-    desktops = (os.getenv("XDG_CURRENT_DESKTOP") or "").lower().split(":")
-    if "umbriel" in desktops:
-        return umbriel_prefers_no_csd()
+    try:
+        desktops = (os.getenv("XDG_CURRENT_DESKTOP") or "").lower().split(":")
+        if "umbriel" in desktops:
+            return umbriel_prefers_no_csd()
+    except Exception:
+        # This runs in do_startup: a detection bug must never keep OmNote from starting.
+        # Keep libadwaita's own corners, as before detection existed.
+        pass
     return False

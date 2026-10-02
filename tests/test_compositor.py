@@ -1,6 +1,7 @@
 """Tests for omnote.compositor (who draws the window's rounded corners)."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -55,6 +56,41 @@ def test_env_override_wins(
     monkeypatch.setenv("XDG_CURRENT_DESKTOP", "Hyprland")
     monkeypatch.setenv("OMNOTE_SQUARE_CORNERS", forced)
     assert compositor.compositor_rounds_corners() is expected
+
+
+def test_unreadable_config_reads_as_absent(
+    config_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Before Python 3.14, is_file() raises PermissionError here; it must not escape."""
+    write(config_home / "umbriel/config.toml", "[appearance]\nprefer_no_csd = false\n")
+
+    def denied(self: Path) -> bool:
+        raise PermissionError(13, "Permission denied", str(self))
+
+    monkeypatch.setattr(Path, "is_file", denied)
+    assert compositor.compositor_rounds_corners()  # umbriel's default, like a missing file
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads through permissions")
+def test_unreadable_config_dir_on_disk(config_home: Path) -> None:
+    config_dir = config_home / "umbriel"
+    write(config_dir / "config.toml", "[appearance]\nprefer_no_csd = false\n")
+    config_dir.chmod(0)
+    try:
+        assert compositor.compositor_rounds_corners()
+    finally:
+        config_dir.chmod(0o755)
+
+
+def test_detection_bug_keeps_libadwaita_corners(
+    config_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """compositor_rounds_corners() runs in do_startup and must never raise."""
+    def broken(path: Path | None = None) -> bool:
+        raise RuntimeError("bug")
+
+    monkeypatch.setattr(compositor, "umbriel_prefers_no_csd", broken)
+    assert compositor.compositor_rounds_corners() is False
 
 
 def test_includes_apply_before_the_file_itself(config_home: Path) -> None:
